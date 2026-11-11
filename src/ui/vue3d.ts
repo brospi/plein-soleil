@@ -51,11 +51,11 @@ export class Vue3D {
   private camera = new THREE.PerspectiveCamera(42, 1, 1, 6000);
   private commandes: OrbitControls;
   private soleil = new THREE.DirectionalLight(0xffffff, 3);
-  private ciel = new THREE.HemisphereLight(0xcfe2f7, 0x8a8273, 1);
+  private ciel = new THREE.HemisphereLight(0xcfe2f7, 0xb9b2a4, 1);
   private maillages = new THREE.Group();
   private marqueurs = new THREE.Group();
-  private matToits = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0, side: THREE.DoubleSide });
-  private matMurs = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0, side: THREE.DoubleSide });
+  private matToits = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0, side: THREE.DoubleSide, shadowSide: THREE.BackSide });
+  private matMurs = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0, side: THREE.DoubleSide, shadowSide: THREE.BackSide });
   private proche: THREE.Mesh | null = null;
   private texture: THREE.Texture | null = null;
   private infos: ResultatMaillage | null = null;
@@ -81,8 +81,9 @@ export class Vue3D {
     this.soleil.castShadow = true;
     const taille = this.mobile ? 2048 : Math.min(4096, this.rendu.capabilities.maxTextureSize);
     this.soleil.shadow.mapSize.set(taille, taille);
-    this.soleil.shadow.bias = -0.0004;
-    this.soleil.shadow.normalBias = 0.35;
+    // Seules les faces à l'ombre projettent : pas d'auto-ombrage parasite sur les faces éclairées.
+    this.soleil.shadow.bias = -0.0002;
+    this.soleil.shadow.normalBias = 0.08;
     this.soleil.shadow.radius = 2.5;
     this.scene3.add(this.soleil, this.soleil.target, this.ciel, this.maillages, this.marqueurs);
 
@@ -268,7 +269,7 @@ export class Vue3D {
     this.soleil.intensity = h > 0 ? 0.5 + 2.1 * Math.min(1, h / 25) : 0;
     this.soleil.color.copy(melanger(0xffb070, 0xfff4e0, h / 20));
     this.soleil.castShadow = h > 0.5;
-    this.ciel.intensity = 0.14 + 0.85 * Math.max(0, Math.min(1, (h + 6) / 18));
+    this.ciel.intensity = 0.16 + 1.05 * Math.max(0, Math.min(1, (h + 6) / 18));
     this.ciel.color.copy(melanger(0x2a3350, 0xcfe2f7, (h + 6) / 14));
     const fond = h > 0 ? melanger(0xf3c9a2, 0xbcd9f2, jourT) : melanger(0x0d1020, 0xf3c9a2, (h + 8) / 8);
     this.scene3.background = fond;
