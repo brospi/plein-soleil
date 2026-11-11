@@ -215,9 +215,10 @@ export function positionDuMur(profil: Float32Array, z: number): number | null {
     const s = S_MIN + (i - 0.5) * S_PAS;
     if (s > S_MAX_MUR) break;
     if (profil[i - 1] > seuil && profil[i] <= seuil && profil[i] > -1000) {
-      // Il faut au moins 0,75 m de vide devant le mur.
+      // Il faut au moins 1 m de vide devant le mur.
       const i2 = Math.min(N_PROFIL - 1, i + 2);
-      if (profil[i + 1] > seuil || profil[i2] > seuil) continue;
+      const i3 = Math.min(N_PROFIL - 1, i + 3);
+      if (profil[i + 1] > seuil || profil[i2] > seuil || profil[i3] > seuil) continue;
       if (meilleur === null || Math.abs(s) < Math.abs(meilleur)) meilleur = s;
     }
   }

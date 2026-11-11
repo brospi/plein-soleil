@@ -4,6 +4,7 @@
  */
 import { type Niveau, type Faisceau, calculerFaisceau, horizonPourAltitude } from './horizon';
 import { type Relief, type AnalysePoint, analyserPoint, decalageDuMur, azimutDe } from './facades';
+import { valeur } from './raster';
 import { type GeometrieFenetre, grilleEchantillons } from './fenetre';
 import { type TableSolaire } from './soleil';
 import { type Echantillons, type Indicateurs, type ResultatSimulation, ModeArbres, simuler } from './simulation';
@@ -74,6 +75,16 @@ export interface ResultatFenetre {
 }
 
 const MARGE_AIR = 0.5;
+/** Écart maximal (m) entre le mur d'un étage et l'origine partagée des rayons. */
+const TOLERANCE_ORIGINE = 1;
+
+/** Décalages de référence : un petit nombre d'origines communes à plusieurs étages. */
+function decalagesDeReference(decalages: number[]): number[] {
+  const tri = [...new Set(decalages)].sort((a, b) => b - a);
+  const refs: number[] = [];
+  for (const d of tri) if (!refs.length || refs[refs.length - 1] - d > TOLERANCE_ORIGINE) refs.push(d);
+  return refs;
+}
 
 export class Calculateur {
   private cache = new Map<string, Faisceau[]>();
@@ -119,6 +130,24 @@ export class Calculateur {
     return { nx, nz, pasAz: f0.pasAz, nAz: f0.nAz, k0: f0.k0, nk: f0.nk, tanDur, tanArb };
   }
 
+  /**
+   * Origine des rayons pour un étage : on réutilise une origine commune un peu
+   * plus avancée si elle est bien à l'air libre à cette altitude, sinon le mur
+   * propre de l'étage. Les murs réels ne sont pas parfaitement verticaux
+   * (corniches, balcons) ; sans ce partage chaque étage relancerait ses rayons.
+   */
+  private origine(s: SpecFenetre, decalage: number, z: number, refs: number[]): number {
+    const dur = this.scene.relief.dur;
+    for (let i = refs.length - 1; i >= 0; i--) {
+      const ref = refs[i];
+      if (ref < decalage || ref - decalage > TOLERANCE_ORIGINE) continue;
+      if (ref === decalage) return ref;
+      const libre = (d: number) => valeur(dur, s.x + s.nx * d, s.y + s.ny * d, 1e9) <= z - 0.5;
+      if (libre(ref + MARGE_AIR) && libre(ref + MARGE_AIR - 0.5) && libre(ref + MARGE_AIR + 0.5)) return ref;
+    }
+    return decalage;
+  }
+
   analyser(s: SpecFenetre, r: Reglages): AnalysePoint {
     return analyserPoint(this.scene.relief, s.x, s.y, s.nx, s.ny, {
       hauteurEtage: r.hauteurEtage,
@@ -146,12 +175,13 @@ export class Calculateur {
       troubleLinke: r.troubleLinke,
     };
     let tHorizon = 0;
+    const refs = decalagesDeReference(an.etages.filter((e) => e.decalage !== null).map((e) => e.decalage!));
     const etages: ResultatEtage[] = an.etages.map((e) => {
       const hauteur = e.z - an.sol;
       if (e.decalage === null) return { etage: e.etage, hauteur, valide: false, indicateurs: null };
       if (!tousLesEtages) return { etage: e.etage, hauteur, valide: true, indicateurs: null };
       const th = performance.now();
-      const ech = this.echantillons(s, e.decalage, e.z);
+      const ech = this.echantillons(s, this.origine(s, e.decalage, e.z, refs), e.z);
       tHorizon += performance.now() - th;
       return { etage: e.etage, hauteur, valide: true, indicateurs: simuler({ ...commun, echantillons: ech, detail: false }).indicateurs };
     });
@@ -175,6 +205,7 @@ export class Calculateur {
       motif = an.etages.length === 0 || zDetail > an.toit ? 'hors-batiment' : 'mitoyen';
     } else {
       const th = performance.now();
+      decalage = this.origine(s, decalage, zDetail, refs);
       const ech = this.echantillons(s, decalage, zDetail);
       tHorizon += performance.now() - th;
       detail = simuler({ ...commun, echantillons: ech, detail: true });

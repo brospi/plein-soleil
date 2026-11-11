@@ -3,8 +3,9 @@ import { Calculateur, REGLAGES_DEFAUT, type SpecFenetre } from '../src/coeur/cal
 import { ModeArbres, Etat } from '../src/coeur/simulation';
 import { boite, scene, X0, Y0, SOL } from './scenes';
 import { CRENEAUX_PAR_JOUR, indexDuJour } from '../src/coeur/soleil';
+import { type GeometrieFenetre } from '../src/coeur/fenetre';
 
-const NUE = { largeur: 1.2, hauteur: 1.6, embrasure: 0, balcon: null };
+const NUE: GeometrieFenetre = { largeur: 1.2, hauteur: 1.6, embrasure: 0, balcon: null };
 
 function fenetre(x: number, y: number, nx: number, ny: number, etage: number, geometrie = NUE): SpecFenetre {
   return { x: X0 + x, y: Y0 + y, nx, ny, etage, hauteurLibre: null, geometrie };
