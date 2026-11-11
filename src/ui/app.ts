@@ -567,13 +567,17 @@ export function demarrer(): void {
     bouton.textContent = 'Préparation…';
     try {
       majURL();
-      const images: Array<{ titre: string; image: HTMLCanvasElement }> = [];
-      const ajouter = (titre: string, image: HTMLCanvasElement | null): void => {
-        if (image) images.push({ titre, image });
+      const images: Array<{ titre: string; legende: string; image: HTMLCanvasElement }> = [];
+      const ajouter = (titre: string, legende: string, image: HTMLCanvasElement | null): void => {
+        if (image) images.push({ titre, legende, image });
       };
-      ajouter('Heures de soleil, jour par jour (plein : aucun obstacle ; pointillés : façade dégagée)', gAnnee.image(760));
-      ajouter('Calendrier solaire (jaune : soleil ; bleu : ombre d’un bâtiment ; vert : ombre d’un arbre ; gris : soleil derrière la façade)', gCalendrier.image(760));
-      ajouter('Course du soleil et masque d’horizon vus de la fenêtre', gCourse.image(760));
+      ajouter('Heures de soleil, jour par jour', 'Orange : plein soleil. Jaune pâle : soleil sur une partie du vitrage. Pointillés : même fenêtre sur une façade dégagée.', gAnnee.image(760));
+      ajouter(
+        'Calendrier solaire',
+        'Une colonne par jour, une ligne par heure légale. Orange : soleil. Bleu : ombre d’un bâtiment ou du relief. Vert : ombre d’un arbre. Violet : balcon ou embrasure. Gris clair : soleil derrière la façade. Bleu nuit : nuit.',
+        gCalendrier.image(760),
+      );
+      ajouter('Course du soleil et masque d’horizon vus de la fenêtre', 'Trait orange : soleil visible de la fenêtre. Bleu : bâtiments et relief. Vert : arbres. Gris clair : directions situées derrière la façade.', gCourse.image(760));
       const t = tableauFacades();
       await exporterPdf({
         adresse: etat.adresse.libelle,

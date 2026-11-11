@@ -9,7 +9,7 @@ export interface ContenuFiche {
   indicateurs: Indicateurs;
   avertissements: string[];
   /** Graphiques rendus en thème clair, avec leur titre. */
-  graphiques: Array<{ titre: string; image: HTMLCanvasElement }>;
+  graphiques: Array<{ titre: string; legende: string; image: HTMLCanvasElement }>;
   facades: { entetes: string[]; lignes: string[][] } | null;
   etages: { entetes: string[]; lignes: string[][] } | null;
   lien: string;
@@ -112,14 +112,20 @@ export async function exporterPdf(c: ContenuFiche): Promise<void> {
 
   for (const g of c.graphiques) {
     const h = ((L - 2 * M) * g.image.height) / g.image.width;
-    sautSiBesoin(h + 10);
+    sautSiBesoin(h + 18);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(10.5);
     doc.setTextColor(31, 28, 22);
     doc.text(sur(g.titre), M, y + 3);
     y += 6;
     doc.addImage(g.image.toDataURL('image/png'), 'PNG', M, y, L - 2 * M, h, undefined, 'FAST');
-    y += h + 6;
+    y += h + 4;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(95, 89, 76);
+    const legende = doc.splitTextToSize(sur(g.legende), L - 2 * M) as string[];
+    doc.text(legende, M, y);
+    y += legende.length * 3.4 + 5;
   }
 
   const tableau = (titreTableau: string, t: { entetes: string[]; lignes: string[][] }): void => {
