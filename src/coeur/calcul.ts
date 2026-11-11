@@ -43,6 +43,8 @@ export interface SpecFenetre {
   etage: number;
   /** Hauteur exacte du centre de la fenêtre au-dessus du sol (m) ; prioritaire sur l'étage. */
   hauteurLibre: number | null;
+  /** Altitude NGF exacte du centre (clic en 3D) ; prioritaire sur tout le reste. */
+  altitude?: number | null;
   geometrie: GeometrieFenetre;
 }
 
@@ -189,8 +191,8 @@ export class Calculateur {
     // Étage détaillé.
     let zDetail: number;
     let decalage: number | null;
-    if (s.hauteurLibre !== null) {
-      zDetail = an.sol + s.hauteurLibre;
+    if (s.altitude != null || s.hauteurLibre !== null) {
+      zDetail = s.altitude != null ? s.altitude : an.sol + s.hauteurLibre!;
       decalage = decalageDuMur(scene.relief, s.x, s.y, s.nx, s.ny, zDetail);
     } else {
       const e = an.etages[s.etage];

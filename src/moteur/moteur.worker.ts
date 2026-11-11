@@ -12,7 +12,7 @@ import { Calculateur } from '../coeur/calcul';
 import { tableSolaire, type TableSolaire } from '../coeur/soleil';
 import { convergenceMeridiens, depuisLambert93 } from '../coeur/lambert93';
 import { Etat } from '../coeur/simulation';
-import { maillerRelief } from '../coeur/maillage';
+import { lisserRelief, maillerRelief } from '../coeur/maillage';
 import { type Raster, valeurLisse } from '../coeur/raster';
 import { Classe } from '../coeur/classification';
 
@@ -174,7 +174,7 @@ function mailler(r: Extract<Requete, { type: 'maillage' }>): { resultat: Resulta
   const z0 = valeurLisse(scene.relief.mnt, r.x, r.y, 0);
   const n0 = scene.niveaux[0];
   const e = extraire(n0.dur, n0.arbres, scene.classes, r.x, r.y, r.rayon);
-  const proche = maillerRelief(e.h, e.cl, e.largeur, e.hauteur, n0.dur.pas, { seuil: 1.2, ox: e.ox, oz: e.oz, z0 });
+  const proche = maillerRelief(lisserRelief(e.h, e.largeur, e.hauteur), e.cl, e.largeur, e.hauteur, n0.dur.pas, { seuil: 1.2, ox: e.ox, oz: e.oz, z0 });
   let lointain = null;
   const n1 = scene.niveaux[1];
   if (n1 && r.rayonLointain > r.rayon) {

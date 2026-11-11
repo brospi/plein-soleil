@@ -36,9 +36,9 @@ class Tampon<T extends Float32Array | Int8Array | Uint8Array | Uint32Array> {
 
 type RVB = [number, number, number];
 
-const COULEUR_TOIT: RVB = [168, 172, 181];
-const COULEUR_MUR: RVB = [222, 211, 190];
-const COULEUR_SOL: RVB = [158, 156, 150];
+const COULEUR_TOIT: RVB = [142, 149, 162];
+const COULEUR_MUR: RVB = [216, 203, 180];
+const COULEUR_SOL: RVB = [124, 122, 118];
 const COULEUR_HERBE: RVB = [137, 165, 104];
 const COULEUR_ARBRE: RVB = [72, 122, 62];
 const COULEUR_TRONC: RVB = [58, 98, 52];
@@ -76,6 +76,42 @@ function bruit(c: number, l: number): number {
   let h = (c * 374761393 + l * 668265263) | 0;
   h = (h ^ (h >>> 13)) * 1274126177;
   return (((h ^ (h >>> 16)) >>> 0) / 4294967295) * 2 - 1;
+}
+
+/**
+ * Lissage léger pour l'affichage : chaque cellule prend la moyenne de ses
+ * voisines de hauteur proche (écart < tolérance). Le bruit du LiDAR sur les
+ * toits et le sol s'efface, les arêtes de façade restent nettes.
+ */
+export function lisserRelief(h: Float32Array, largeur: number, hauteur: number, tolerance = 0.6, passes = 2): Float32Array {
+  let source = h;
+  for (let p = 0; p < passes; p++) {
+    const sortie = new Float32Array(source.length);
+    for (let l = 0; l < hauteur; l++) {
+      for (let c = 0; c < largeur; c++) {
+        const i = l * largeur + c;
+        const z = source[i];
+        let somme = z * 2;
+        let poids = 2;
+        for (let dl = -1; dl <= 1; dl++) {
+          const ll = l + dl;
+          if (ll < 0 || ll >= hauteur) continue;
+          for (let dc = -1; dc <= 1; dc++) {
+            const cc = c + dc;
+            if ((dl === 0 && dc === 0) || cc < 0 || cc >= largeur) continue;
+            const v = source[ll * largeur + cc];
+            if (Math.abs(v - z) < tolerance) {
+              somme += v;
+              poids++;
+            }
+          }
+        }
+        sortie[i] = somme / poids;
+      }
+    }
+    source = sortie;
+  }
+  return source;
 }
 
 export interface OptionsMaillage {
@@ -151,11 +187,19 @@ export function maillerRelief(h: Float32Array, classes: Uint8Array | null, large
   const mur = (x1: number, z1: number, x2: number, z2: number, h1a: number, h2a: number, h1b: number, h2b: number, nax: number, naz: number, clA: number, clB: number): void => {
     if (Math.abs(h1a - h1b) < 1e-3 && Math.abs(h2a - h2b) < 1e-3) return;
     const aHaut = h1a + h2a > h1b + h2b;
-    // (nax, naz) pointe de a vers b.
-    const nx = aHaut ? nax : -nax;
-    const nz = aHaut ? naz : -naz;
+    // (nax, naz) pointe de a vers b : normale géométrique de la face, du côté haut vers le côté bas.
+    const fx = aHaut ? nax : -nax;
+    const fz = aHaut ? naz : -naz;
+    // Normale d'éclairage : celle de la façade réelle (pente locale du relief) si elle
+    // regarde du même côté ; un mur oblique, maillé en escalier, est ainsi éclairé uniformément.
+    let nx = fx;
+    let nz = fz;
+    if (murNx * fx + murNz * fz > 0.25) {
+      nx = murNx;
+      nz = murNz;
+    }
     const c = couleurMur(aHaut ? clA : clB);
-    const v = bruit(Math.round(x1 * 7), Math.round(z1 * 7)) * 0.6;
+    const v = bruit(Math.round(x1), Math.round(z1)) * 0.25;
     const p1 = sommet(x1, h1a - z0, z1, nx, 0, nz, c, v);
     const p2 = sommet(x2, h2a - z0, z2, nx, 0, nz, c, v);
     const p3 = sommet(x2, h2b - z0, z2, nx, 0, nz, c, v - 1.5);
@@ -165,13 +209,36 @@ export function maillerRelief(h: Float32Array, classes: Uint8Array | null, large
     const ez = z2 - z1;
     // (p2 − p1) × (p4 − p1), composantes horizontales : (−ez·dy, ex·dy) avec dy = h1b − h1a.
     const dy = h1b - h1a || h2b - h2a;
-    const avant = -ez * dy * nx + ex * dy * nz > 0;
+    const avant = -ez * dy * fx + ex * dy * fz > 0;
     if (avant) {
       triangle(iMurs, p1, p2, p4);
       triangle(iMurs, p2, p3, p4);
     } else {
       triangle(iMurs, p1, p4, p2);
       triangle(iMurs, p2, p4, p3);
+    }
+  };
+
+  // Direction de la façade au voisinage d'un carré discontinu : opposé du gradient sur 4 × 4 cellules.
+  let murNx = 0;
+  let murNz = 0;
+  const borne = (v: number): number => Math.max(-12, Math.min(12, v));
+  const orienterMur = (c: number, l: number): void => {
+    const cA = Math.max(0, c - 1);
+    const cB = Math.min(largeur - 1, c + 2);
+    const lA = Math.max(0, l - 1);
+    const lB = Math.min(hauteur - 1, l + 2);
+    let gx = 0;
+    let gz = 0;
+    for (let ll = lA; ll <= lB; ll++) gx += borne(h[ll * largeur + cB] - h[ll * largeur + cA]);
+    for (let cc = cA; cc <= cB; cc++) gz += borne(h[lB * largeur + cc] - h[lA * largeur + cc]);
+    const norme = Math.hypot(gx, gz);
+    if (norme < 1e-3) {
+      murNx = 0;
+      murNz = 0;
+    } else {
+      murNx = -gx / norme;
+      murNz = -gz / norme;
     }
   };
 
@@ -195,6 +262,7 @@ export function maillerRelief(h: Float32Array, classes: Uint8Array | null, large
         continue;
       }
       // Carré discontinu : quatre quarts + murs.
+      orienterMur(c, l);
       const x0 = ox + c * pas;
       const z0q = oz + l * pas;
       const xm = x0 + pas / 2;

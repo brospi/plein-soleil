@@ -103,6 +103,6 @@ export async function chercherAdresses(q: string, signal?: AbortSignal): Promise
     return await chercherPhoton(texte, signal);
   } catch (e) {
     if (signal?.aborted) throw e;
-    throw new Error('La recherche d’adresse est momentanément indisponible (services IGN et OpenStreetMap injoignables). Réessayez dans un instant.');
+    throw new Error('La recherche d’adresse est momentanément indisponible (services IGN et OpenStreetMap injoignables). Réessayez dans un instant.', { cause: e });
   }
 }

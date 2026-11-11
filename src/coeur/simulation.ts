@@ -131,6 +131,7 @@ export function simuler(p: ParametresSimulation): ResultatSimulation {
   let energie = 0;
   let energieRef = 0;
   let joursSans = 0;
+  const centre = Math.floor(nx / 2) * nz + Math.floor(nz / 2);
 
   for (let j = 0; j < jours; j++) {
     const c0 = table.lever[j];
@@ -160,25 +161,28 @@ export function simuler(p: ParametresSimulation): ResultatSimulation {
       const tanEl = Math.tan(el * RAD);
       const tanG = Math.tan(rel * RAD);
       const tanProfil = tanEl / cosG;
-      // Référence : même baie, sans balcon ni obstacle lointain.
-      const okRef = rectangleEclaire(fenetre, tanG, tanProfil, false, true, rectRef);
-      if (!okRef) {
-        if (etats) etats[i] = Etat.OmbrePropre;
-        continue;
-      }
-      const fRef = (rectRef.xb - rectRef.xa) * rectRef.zb;
-      const dni = directNormal(el, r, p.altitude, linke);
-      const cosInc = Math.cos(el * RAD) * cosG;
-      hR += dt;
-      energieRef += dni * cosInc * fRef * dt;
-      if (!rectangleEclaire(fenetre, tanG, tanProfil, true, true, rect)) {
-        if (etats) etats[i] = Etat.OmbrePropre;
-        continue;
-      }
       const k = ((Math.round(azg / pasAz) % nAz) + nAz) % nAz;
       const jk = (k - k0 + nAz) % nAz;
       if (jk >= nk) {
         if (etats) etats[i] = Etat.Derriere;
+        continue;
+      }
+      // Référence : même baie, sans balcon ni obstacle lointain.
+      const okRef = rectangleEclaire(fenetre, tanG, tanProfil, false, true, rectRef);
+      let fRef = 0;
+      let dni = 0;
+      const cosInc = Math.cos(el * RAD) * cosG;
+      if (okRef) {
+        fRef = (rectRef.xb - rectRef.xa) * rectRef.zb;
+        dni = directNormal(el, r, p.altitude, linke);
+        hR += dt;
+        energieRef += dni * cosInc * fRef * dt;
+      }
+      if (!okRef || !rectangleEclaire(fenetre, tanG, tanProfil, true, true, rect)) {
+        // Vitrage entièrement dans l'ombre de la baie : on signale d'abord un éventuel obstacle extérieur.
+        if (etats) {
+          etats[i] = tanEl <= ech.tanDur[centre][jk] ? Etat.OmbreBati : tau < 1 && tanEl <= ech.tanArb[centre][jk] ? Etat.OmbreArbre : Etat.OmbrePropre;
+        }
         continue;
       }
       // Recouvrement de chaque cellule d'échantillonnage avec le rectangle éclairé.
