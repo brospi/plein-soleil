@@ -26,6 +26,8 @@ export interface OptionsRequete {
   service: string;
   essais?: number;
   delaiMaxMs?: number;
+  /** Durée maximale d'une tentative avant abandon et relance (ms). */
+  expirationMs?: number;
   signal?: AbortSignal;
   surAttente?: (a: Attente) => void;
 }
@@ -55,9 +57,14 @@ export async function requete(url: string, o: OptionsRequete): Promise<Response>
   const essais = o.essais ?? 4;
   let dernierStatut: number | null = null;
   for (let essai = 1; essai <= essais; essai++) {
+    // Une requête restée sans réponse est abandonnée puis relancée.
+    const garde = new AbortController();
+    const minuterie = setTimeout(() => garde.abort(), o.expirationMs ?? 20_000);
+    const annuler = (): void => garde.abort();
+    o.signal?.addEventListener('abort', annuler);
     try {
-      const r = await fetch(url, { signal: o.signal });
-      if (r.ok) return r;
+      const r = await fetch(url, { signal: garde.signal });
+      if (r.ok) return new Response(await r.arrayBuffer(), { status: r.status, headers: r.headers });
       dernierStatut = r.status;
       if (r.status !== 429 && r.status < 500) break; // erreur définitive (400, 404…)
       if (essai < essais) {
@@ -67,13 +74,16 @@ export async function requete(url: string, o: OptionsRequete): Promise<Response>
         await pause(delaiMs, o.signal);
       }
     } catch (e) {
-      if ((e as Error).name === 'AbortError') throw e;
+      if (o.signal?.aborted) throw e;
       dernierStatut = null;
       if (essai < essais) {
         const delaiMs = DELAIS[essai - 1] ?? 12000;
         o.surAttente?.({ service: o.service, statut: null, essai, delaiMs });
         await pause(delaiMs, o.signal);
       }
+    } finally {
+      clearTimeout(minuterie);
+      o.signal?.removeEventListener('abort', annuler);
     }
   }
   throw new ErreurReseau(messageStatut(o.service, dernierStatut), o.service, dernierStatut);

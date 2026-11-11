@@ -43,16 +43,24 @@ function attendre<T>(req: IDBRequest<T>): Promise<T> {
   });
 }
 
-export async function lire(cle: string): Promise<ArrayBuffer | null> {
-  try {
-    const base = await ouvrir();
-    if (!base) return null;
-    const e = (await attendre(base.transaction(MAGASIN).objectStore(MAGASIN).get(cle))) as Entree | undefined;
-    if (!e || Date.now() - e.date > DUREE_MS) return null;
-    return e.donnees;
-  } catch {
-    return null;
-  }
+/** Borne la durée d'une opération : un cache qui ne répond pas ne doit jamais bloquer le calcul. */
+function borner<T>(promesse: Promise<T>, ms: number, defaut: T): Promise<T> {
+  return Promise.race([promesse, new Promise<T>((resolve) => setTimeout(() => resolve(defaut), ms))]);
+}
+
+export function lire(cle: string): Promise<ArrayBuffer | null> {
+  const lecture = (async (): Promise<ArrayBuffer | null> => {
+    try {
+      const base = await ouvrir();
+      if (!base) return null;
+      const e = (await attendre(base.transaction(MAGASIN).objectStore(MAGASIN).get(cle))) as Entree | undefined;
+      if (!e || Date.now() - e.date > DUREE_MS) return null;
+      return e.donnees;
+    } catch {
+      return null;
+    }
+  })();
+  return borner(lecture, 2500, null);
 }
 
 export async function ecrire(cle: string, donnees: ArrayBuffer): Promise<void> {

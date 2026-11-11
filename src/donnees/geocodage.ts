@@ -87,22 +87,58 @@ async function chercherPhoton(q: string, signal?: AbortSignal): Promise<Adresse[
   return resultats;
 }
 
-/** Propositions d'adresses pour une saisie ; lève une erreur si les deux services échouent. */
+const ERREUR_TOTALE = 'La recherche d’adresse est momentanément indisponible (services IGN et OpenStreetMap injoignables). Réessayez dans un instant.';
+
+/**
+ * Propositions d'adresses pour une saisie. L'IGN est interrogé d'abord ; s'il
+ * n'a pas répondu au bout de 1,2 s, Photon est lancé en parallèle et le
+ * premier résultat utilisable l'emporte. Lève une erreur si les deux échouent.
+ */
 export async function chercherAdresses(q: string, signal?: AbortSignal): Promise<Adresse[]> {
   const texte = q.trim();
   if (texte.length < 3) return [];
-  if (Date.now() >= ignIndisponibleJusqua) {
+  if (Date.now() < ignIndisponibleJusqua) {
     try {
-      return await chercherIGN(texte, signal);
+      return await chercherPhoton(texte, signal);
     } catch (e) {
       if (signal?.aborted) throw e;
-      ignIndisponibleJusqua = Date.now() + 60_000;
+      throw new Error(ERREUR_TOTALE, { cause: e });
     }
   }
-  try {
-    return await chercherPhoton(texte, signal);
-  } catch (e) {
-    if (signal?.aborted) throw e;
-    throw new Error('La recherche d’adresse est momentanément indisponible (services IGN et OpenStreetMap injoignables). Réessayez dans un instant.', { cause: e });
-  }
+  return new Promise<Adresse[]>((resoudre, rejeter) => {
+    let fini = false;
+    let echecs = 0;
+    let photonLance = false;
+    const reussir = (r: Adresse[]): void => {
+      if (fini) return;
+      fini = true;
+      clearTimeout(minuterie);
+      resoudre(r);
+    };
+    const echouer = (e: unknown): void => {
+      if (fini) return;
+      if (signal?.aborted) {
+        fini = true;
+        clearTimeout(minuterie);
+        rejeter(e);
+        return;
+      }
+      echecs++;
+      if (echecs >= 2) {
+        fini = true;
+        rejeter(new Error(ERREUR_TOTALE, { cause: e }));
+      }
+    };
+    const lancerPhoton = (): void => {
+      if (photonLance || fini) return;
+      photonLance = true;
+      chercherPhoton(texte, signal).then(reussir, echouer);
+    };
+    const minuterie = setTimeout(lancerPhoton, 1200);
+    chercherIGN(texte, signal).then(reussir, (e) => {
+      if (!signal?.aborted) ignIndisponibleJusqua = Date.now() + 60_000;
+      lancerPhoton();
+      echouer(e);
+    });
+  });
 }

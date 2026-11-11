@@ -89,6 +89,12 @@ export class Carte {
     this.carte.setView(this.latLng(x, y), zoom);
   }
 
+  /** Position à l'écran (pixels dans le conteneur de la carte) d'un point Lambert 93. */
+  versEcran(x: number, y: number): { x: number; y: number } {
+    const p = this.carte.latLngToContainerPoint(this.latLng(x, y));
+    return { x: p.x, y: p.y };
+  }
+
   /** À appeler quand le conteneur change de taille ou redevient visible. */
   redimensionner(): void {
     this.carte.invalidateSize();

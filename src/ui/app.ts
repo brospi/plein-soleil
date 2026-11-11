@@ -5,7 +5,7 @@
 import { Moteur, ErreurMoteur } from '../moteur/client';
 import { type InfoScene, type ResultatCalcul } from '../moteur/protocole';
 import { type ResultatEtage, type ResultatFenetre } from '../coeur/calcul';
-import { ETAGES_DEFAUT, areteLaPlusProche, azimutDe } from '../coeur/facades';
+import { areteLaPlusProche, azimutDe } from '../coeur/facades';
 import { ModeArbres } from '../coeur/simulation';
 import { CRENEAUX_PAR_JOUR, indexDuJour } from '../coeur/soleil';
 import { type Adresse } from '../donnees/geocodage';
@@ -21,7 +21,7 @@ import { GrapheCalendrier } from './graphiques/calendrier';
 import { GrapheJournee, phraseCreneaux } from './graphiques/journee';
 import { GrapheEtages } from './graphiques/etages';
 import { GrapheCourse } from './graphiques/course';
-import { annoncer, dateLongue, differer, duree, echapper, el, nombre, nomEtage, orientation, orientationAbregee, parId, pourcent } from './outils';
+import { annoncer, dateLongue, differer, duree, el, nombre, nomEtage, orientation, orientationAbregee, parId, pourcent } from './outils';
 import type { Vue3D } from './vue3d';
 
 const EXEMPLES: Array<{ nom: string; libelle: string; lon: number; lat: number }> = [
@@ -742,7 +742,14 @@ export function demarrer(): void {
     etat: () => etat,
     resultat: () => resultat,
     scene: () => scene,
-    echapper,
-    ETAGES_DEFAUT,
+    /** Murs libres dès le rez-de-chaussée, du plus proche de l'adresse au plus lointain, avec leur position à l'écran. */
+    murs: () => {
+      if (!scene || !etat.adresse) return [];
+      const { x, y } = etat.adresse;
+      return scene.aretes
+        .filter((a) => a.statut === 'libre' && a.etageMin === 0 && a.longueur > 6 && a.nbEtages >= 3)
+        .map((a) => ({ x: (a.ax + a.bx) / 2, y: (a.ay + a.by) / 2, distance: Math.hypot((a.ax + a.bx) / 2 - x, (a.ay + a.by) / 2 - y), ecran: carte.versEcran((a.ax + a.bx) / 2, (a.ay + a.by) / 2) }))
+        .sort((p, q) => p.distance - q.distance);
+    },
   };
 }
