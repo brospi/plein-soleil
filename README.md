@@ -72,7 +72,7 @@ Tous ces services ont été vérifiés avec un en-tête `Origin` étranger (`Acc
 | Classes LiDAR HD | même WMS, couche `IGNF_LIDAR-HD_CLASS`, PNG | palette fixe (sol, végétation, bâtiment, eau, pont…), alignée sur le MNS |
 | Terrain de repli | même WMS, `ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES` (RGE ALTI) | zones sans LiDAR HD |
 | Bâtiments | WFS `data.geopf.fr/wfs/ows`, `BDTOPO_V3:batiment` | renvoie parfois une page non JSON avec un code 200 : relancé |
-| Adresses | `data.geopf.fr/geocodage/search`, repli Photon (`photon.komoot.io`) | Photon est lancé en parallèle si l'IGN n'a pas répondu en 1,2 s ; un numéro absent de la Base Adresse Nationale est signalé (« rue entière ») |
+| Adresses | `data.geopf.fr/geocodage/search`, repli Photon (`photon.komoot.io`) | Photon est lancé en parallèle si l'IGN n'a pas répondu en 1,2 s ; si le numéro demandé est absent de la Base Adresse Nationale, le numéro existant le plus proche (±10) est cherché et proposé en tête ; à défaut, la rue entière est signalée |
 | Fonds de carte | WMTS `data.geopf.fr/wmts` (Plan IGN v2, orthophotos) | |
 | Photo aérienne 3D | WMS `HR.ORTHOIMAGERY.ORTHOPHOTOS` | texture optionnelle de la vue 3D |
 

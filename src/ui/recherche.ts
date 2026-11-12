@@ -1,5 +1,5 @@
 /** Champ de recherche d'adresse avec suggestions (clavier, souris, tactile). */
-import { type Adresse, chercherAdresses, numeroDemande } from '../donnees/geocodage';
+import { type Adresse, chercherAdresses, numeroDemande, numeroLePlusProche } from '../donnees/geocodage';
 import { el, parId } from './outils';
 
 export function installerRecherche(surChoix: (a: Adresse) => void): { definir(texte: string): void } {
@@ -28,7 +28,11 @@ export function installerRecherche(surChoix: (a: Adresse) => void): { definir(te
       return;
     }
     resultats.forEach((a, i) => {
-      const note = numeroManquant(a) ? `Numéro ${numero} introuvable : ${a.precision === 'rue' ? 'rue entière' : 'lieu approché'}` : '';
+      const note = a.approche
+        ? `Numéro ${a.approche.demande} absent de la base d’adresses : placé sur le ${a.approche.trouve}, le plus proche`
+        : numeroManquant(a)
+          ? `Numéro ${numero} introuvable : ${a.precision === 'rue' ? 'rue entière' : 'lieu approché'}`
+          : '';
       const li = el('li', { role: 'option', id: `sug-${i}`, 'aria-selected': i === actif ? 'true' : 'false' }, a.libelle, el('small', {}, [note, a.contexte].filter(Boolean).join(' · ')));
       li.addEventListener('pointerdown', (ev) => {
         ev.preventDefault();
@@ -49,9 +53,11 @@ export function installerRecherche(surChoix: (a: Adresse) => void): { definir(te
     champ.value = a.libelle;
     fermer();
     champ.blur();
-    etat.textContent = numeroManquant(a)
-      ? `Le numéro ${numero} n’a pas été trouvé : la carte est placée sur ${a.precision === 'rue' ? 'la rue' : 'un lieu proche'}. Déplacez-la jusqu’au bon immeuble, les bâtiments se chargent en chemin.`
-      : '';
+    etat.textContent = a.approche
+      ? `Le numéro ${a.approche.demande} n’existe pas dans la base d’adresses : la carte est placée sur le ${a.approche.trouve}, le numéro existant le plus proche. Déplacez-la si besoin, les bâtiments se chargent en chemin.`
+      : numeroManquant(a)
+        ? `Le numéro ${numero} n’a pas été trouvé : la carte est placée sur ${a.precision === 'rue' ? 'la rue' : 'un lieu proche'}. Déplacez-la jusqu’au bon immeuble, les bâtiments se chargent en chemin.`
+        : '';
     surChoix(a);
   };
 
@@ -70,6 +76,14 @@ export function installerRecherche(surChoix: (a: Adresse) => void): { definir(te
       actif = -1;
       etat.textContent = resultats.length ? '' : 'Aucune adresse trouvée. Précisez la commune ou le code postal.';
       afficher();
+      // Numéro absent de la base : on propose en tête le numéro existant le plus proche.
+      const signal = annulation.signal;
+      const voisin = await numeroLePlusProche(q, resultats, signal);
+      if (voisin && !signal.aborted) {
+        resultats = [voisin, ...resultats];
+        if (actif >= 0) actif++;
+        if (document.activeElement === champ) afficher();
+      }
     } catch (e) {
       if ((e as Error).name === 'AbortError') return;
       resultats = [];

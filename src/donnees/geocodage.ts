@@ -15,6 +15,12 @@ export interface Adresse {
   source: 'ign' | 'osm';
   /** Ce que le service a réellement localisé : le numéro, la rue entière ou un lieu approché. */
   precision: Precision;
+  /** Nom de la voie, numéro et code postal, quand le service les distingue. */
+  rue?: string;
+  numero?: string;
+  codePostal?: string;
+  /** Le numéro demandé n'existe pas : le point est celui du numéro existant le plus proche. */
+  approche?: { demande: string; trouve: string };
 }
 
 export type Precision = 'numero' | 'rue' | 'lieu';
@@ -57,6 +63,10 @@ interface ProprietesIGN {
   type?: string;
   x?: number;
   y?: number;
+  name?: string;
+  street?: string;
+  housenumber?: string | null;
+  postcode?: string;
 }
 
 interface FeatureIGN {
@@ -70,11 +80,24 @@ export function adresseIGN(f: FeatureIGN): Adresse {
   // Le service fournit x/y en Lambert 93 ; à défaut on projette nous-mêmes.
   const l93 = typeof p.x === 'number' && typeof p.y === 'number' && p.x > 0 ? { x: p.x, y: p.y } : versLambert93(lon, lat);
   const precision: Precision = p.type === 'housenumber' ? 'numero' : p.type === 'street' ? 'rue' : 'lieu';
-  return { libelle: p.label ?? '', contexte: p.context ?? '', lon, lat, x: l93.x, y: l93.y, source: 'ign', precision };
+  return {
+    libelle: p.label ?? '',
+    contexte: p.context ?? '',
+    lon,
+    lat,
+    x: l93.x,
+    y: l93.y,
+    source: 'ign',
+    precision,
+    rue: p.street ?? (precision === 'rue' ? p.name : undefined),
+    numero: p.housenumber ?? undefined,
+    codePostal: p.postcode,
+  };
 }
 
-async function chercherIGN(q: string, signal?: AbortSignal): Promise<Adresse[]> {
-  const r = await avecDelai(`${URL_IGN}?q=${encodeURIComponent(q)}&autocomplete=1&index=address&limit=6`, 3500, signal);
+async function chercherIGN(q: string, signal?: AbortSignal, exacte = false): Promise<Adresse[]> {
+  const options = exacte ? 'autocomplete=0&index=address&limit=1' : 'autocomplete=1&index=address&limit=6';
+  const r = await avecDelai(`${URL_IGN}?q=${encodeURIComponent(q)}&${options}`, 3500, signal);
   if (!r.ok) throw new Error(`IGN ${r.status}`);
   const geo = (await r.json()) as { features: FeatureIGN[] };
   return trierParPrecision(q, geo.features.map(adresseIGN));
@@ -107,7 +130,19 @@ export function adressePhoton(f: FeaturePhoton): Adresse | null {
   if (!libelle) return null;
   const precision: Precision = p.housenumber ? 'numero' : p.type === 'street' ? 'rue' : 'lieu';
   const l93 = versLambert93(lon, lat);
-  return { libelle, contexte: [p.district, p.state].filter(Boolean).join(', '), lon, lat, x: l93.x, y: l93.y, source: 'osm', precision };
+  return {
+    libelle,
+    contexte: [p.district, p.state].filter(Boolean).join(', '),
+    lon,
+    lat,
+    x: l93.x,
+    y: l93.y,
+    source: 'osm',
+    precision,
+    rue: p.street ?? (precision === 'rue' ? p.name : undefined),
+    numero: p.housenumber,
+    codePostal: p.postcode,
+  };
 }
 
 async function chercherPhoton(q: string, signal?: AbortSignal): Promise<Adresse[]> {
@@ -180,4 +215,67 @@ export async function chercherAdresses(q: string, signal?: AbortSignal): Promise
       echouer(e);
     });
   });
+}
+
+/* ------------------------------------------------------------------ */
+/* Numéro absent : chercher le numéro existant le plus proche          */
+/* ------------------------------------------------------------------ */
+
+const EN_TETE_NUMERO = /^\s*\d{1,4}\s*(?:bis|ter|quater|[a-d])?(?=[\s,]|$)/i;
+
+const normaliser = (s: string | undefined): string =>
+  (s ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+
+/**
+ * Numéros à essayer autour d'un numéro absent, en deux vagues du plus proche
+ * au plus lointain. Le même côté de la rue (même parité) passe avant l'autre.
+ */
+export function numerosVoisins(numero: string): number[][] {
+  const n = parseInt(numero, 10);
+  const avecSuffixe = /[a-z]/i.test(numero);
+  const autour = (ecarts: number[]): number[] => ecarts.flatMap((e) => [n - e, n + e]).filter((v) => v > 0);
+  // « 12 bis » introuvable : le 12 lui-même est le premier candidat.
+  return [[...(avecSuffixe ? [n] : []), ...autour([2, 1, 4])], autour([3, 6, 5, 8, 10])];
+}
+
+/**
+ * Quand le numéro demandé n'existe pas dans la base d'adresses et que seule la
+ * rue a été trouvée, cherche le numéro existant le plus proche sur la même rue
+ * et renvoie une adresse placée dessus (libellée avec le numéro demandé).
+ * Renvoie null si rien n'est trouvé à ±10 numéros.
+ */
+export async function numeroLePlusProche(q: string, resultats: Adresse[], signal?: AbortSignal): Promise<Adresse | null> {
+  const demande = numeroDemande(q);
+  const rue = resultats[0];
+  if (!demande || !rue || rue.precision !== 'rue' || !rue.rue || resultats.some((a) => a.precision === 'numero')) return null;
+  const n = parseInt(demande, 10);
+  const chercher = async (candidat: number): Promise<Adresse | null> => {
+    const texte = q.replace(EN_TETE_NUMERO, String(candidat));
+    try {
+      const trouves = rue.source === 'ign' ? await chercherIGN(texte, signal, true) : await chercherPhoton(texte, signal);
+      // Le service doit avoir localisé exactement ce numéro, sur la même rue.
+      return (
+        trouves.find(
+          (a) => a.precision === 'numero' && a.numero === String(candidat) && normaliser(a.rue) === normaliser(rue.rue) && (!a.codePostal || !rue.codePostal || a.codePostal === rue.codePostal),
+        ) ?? null
+      );
+    } catch {
+      return null;
+    }
+  };
+  for (const vague of numerosVoisins(demande)) {
+    const trouves = (await Promise.all(vague.map(chercher))).filter((a): a is Adresse => a !== null);
+    if (signal?.aborted) return null;
+    if (!trouves.length) continue;
+    // Le plus proche en numérotation ; à écart comparable, le même côté de la rue.
+    const rang = (a: Adresse): number => Math.abs(Number(a.numero) - n) + (Number(a.numero) % 2 === n % 2 ? 0 : 1.5);
+    const voisin = trouves.sort((a, b) => rang(a) - rang(b))[0];
+    return { ...voisin, libelle: `${demande} ${rue.libelle}`, numero: demande, approche: { demande, trouve: voisin.numero! } };
+  }
+  return null;
 }
