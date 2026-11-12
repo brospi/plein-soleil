@@ -54,6 +54,7 @@ e2e/          tests de bout en bout
 
 ### Idées clés
 
+- **La zone chargée suit la carte.** Bâtiments et relief fin ne sont téléchargés que dans un rayon de 160 m. Quand la carte s'en éloigne de plus de 70 m, la zone est rechargée à l'endroit affiché ; si une fenêtre est déjà placée, un bouton le propose au lieu de le faire d'office.
 - **Relief en trois niveaux**, une requête WMS par niveau, calée sur une grille pour que le cache serve : 0,5 m sur 512 m de côté, 2 m sur 2 km, 8 m sur 8 km.
 - **Enveloppes d'horizon.** Pour chaque azimut (pas de 0,25°), le rayon traverse les cellules du raster par un parcours de grille exact. On ne garde que l'enveloppe convexe supérieure du profil (distance, altitude) : elle suffit pour retrouver l'angle d'horizon depuis n'importe quelle hauteur sur la même verticale. Changer d'étage ne relance donc aucun rayon (10 à 40 ms mesurés).
 - **Deux horizons**, bâti et arbres, grâce à la carte de classes LiDAR HD (`IGNF_LIDAR-HD_CLASS`).
@@ -67,11 +68,11 @@ Tous ces services ont été vérifiés avec un en-tête `Origin` étranger (`Acc
 
 | Donnée | Service | Remarques |
 |---|---|---|
-| MNS et MNT LiDAR HD | WMS-Raster `data.geopf.fr/wms-r/wms`, couches `IGNF_LIDAR-HD_MNS_ELEVATION.ELEVATIONGRIDCOVERAGE.LAMB93` et `..._MNT_...` | `image/x-bil;bits=32`, EPSG:2154, sans donnée = −9999 |
+| MNS et MNT LiDAR HD | WMS-Raster `data.geopf.fr/wms-r/wms`, couches `IGNF_LIDAR-HD_MNS_ELEVATION.ELEVATIONGRIDCOVERAGE.LAMB93` et `..._MNT_...` | `image/x-bil;bits=32`, EPSG:2154, sans donnée = −9999. Renvoie parfois un 400 passager sur une requête valide, avec un cache de 21 jours : les relances contournent le cache du navigateur |
 | Classes LiDAR HD | même WMS, couche `IGNF_LIDAR-HD_CLASS`, PNG | palette fixe (sol, végétation, bâtiment, eau, pont…), alignée sur le MNS |
 | Terrain de repli | même WMS, `ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES` (RGE ALTI) | zones sans LiDAR HD |
 | Bâtiments | WFS `data.geopf.fr/wfs/ows`, `BDTOPO_V3:batiment` | renvoie parfois une page non JSON avec un code 200 : relancé |
-| Adresses | `data.geopf.fr/geocodage/search`, repli Photon (`photon.komoot.io`) | Photon est lancé en parallèle si l'IGN n'a pas répondu en 1,2 s |
+| Adresses | `data.geopf.fr/geocodage/search`, repli Photon (`photon.komoot.io`) | Photon est lancé en parallèle si l'IGN n'a pas répondu en 1,2 s ; un numéro absent de la Base Adresse Nationale est signalé (« rue entière ») |
 | Fonds de carte | WMTS `data.geopf.fr/wmts` (Plan IGN v2, orthophotos) | |
 | Photo aérienne 3D | WMS `HR.ORTHOIMAGERY.ORTHOPHOTOS` | texture optionnelle de la vue 3D |
 
@@ -88,7 +89,7 @@ Tests unitaires (`npm test`) :
 - **Ordres de grandeur** (Paris, immeuble isolé) : façade sud ≈ 3 600 h/an, nord ≈ 800 h/an, sud + nord = durée du jour, est ≈ ouest ; l'ensoleillement croît avec l'étage dans une rue de 10 m ; recalcul d'un étage < 100 ms.
 - **Arbres, classification, maillage, exports, état partagé par URL.**
 
-Tests de bout en bout (`npm run test:e2e`) sur les services réels : Paris 11e, Montreuil, Lyon 1er (parcours complet, cohérence des résultats, performances), Lille (repli sans LiDAR HD), partage par lien, comparateur, exports PDF et CSV, vue 3D, affichage mobile.
+Tests de bout en bout (`npm run test:e2e`) sur les services réels : Paris 11e, Montreuil, Lyon 1er (parcours complet, cohérence des résultats, performances), Lille (repli sans LiDAR HD), partage par lien, comparateur, exports PDF et CSV, vue 3D, affichage mobile, rechargement de la zone quand la carte se déplace, erreurs passagères de l'IGN (400 mis en cache, 429).
 
 ## Limites connues
 

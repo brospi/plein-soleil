@@ -1,5 +1,5 @@
 /** Champ de recherche d'adresse avec suggestions (clavier, souris, tactile). */
-import { type Adresse, chercherAdresses } from '../donnees/geocodage';
+import { type Adresse, chercherAdresses, numeroDemande } from '../donnees/geocodage';
 import { el, parId } from './outils';
 
 export function installerRecherche(surChoix: (a: Adresse) => void): { definir(texte: string): void } {
@@ -11,6 +11,9 @@ export function installerRecherche(surChoix: (a: Adresse) => void): { definir(te
   let actif = -1;
   let annulation: AbortController | null = null;
   let minuterie = 0;
+  /** Numéro de voie saisi par l'utilisateur pour la dernière recherche aboutie. */
+  let numero: string | null = null;
+  const numeroManquant = (a: Adresse): boolean => numero !== null && a.precision !== 'numero';
 
   const fermer = (): void => {
     liste.hidden = true;
@@ -25,7 +28,8 @@ export function installerRecherche(surChoix: (a: Adresse) => void): { definir(te
       return;
     }
     resultats.forEach((a, i) => {
-      const li = el('li', { role: 'option', id: `sug-${i}`, 'aria-selected': i === actif ? 'true' : 'false' }, a.libelle, el('small', {}, a.contexte));
+      const note = numeroManquant(a) ? `Numéro ${numero} introuvable : ${a.precision === 'rue' ? 'rue entière' : 'lieu approché'}` : '';
+      const li = el('li', { role: 'option', id: `sug-${i}`, 'aria-selected': i === actif ? 'true' : 'false' }, a.libelle, el('small', {}, [note, a.contexte].filter(Boolean).join(' · ')));
       li.addEventListener('pointerdown', (ev) => {
         ev.preventDefault();
         choisir(i);
@@ -45,7 +49,9 @@ export function installerRecherche(surChoix: (a: Adresse) => void): { definir(te
     champ.value = a.libelle;
     fermer();
     champ.blur();
-    etat.textContent = '';
+    etat.textContent = numeroManquant(a)
+      ? `Le numéro ${numero} n’a pas été trouvé : la carte est placée sur ${a.precision === 'rue' ? 'la rue' : 'un lieu proche'}. Déplacez-la jusqu’au bon immeuble, les bâtiments se chargent en chemin.`
+      : '';
     surChoix(a);
   };
 
@@ -60,6 +66,7 @@ export function installerRecherche(surChoix: (a: Adresse) => void): { definir(te
     annulation = new AbortController();
     try {
       resultats = await chercherAdresses(q, annulation.signal);
+      numero = numeroDemande(q);
       actif = -1;
       etat.textContent = resultats.length ? '' : 'Aucune adresse trouvée. Précisez la commune ou le code postal.';
       afficher();

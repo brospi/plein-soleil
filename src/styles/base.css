@@ -461,6 +461,17 @@ h3 + .aide {
   display: flex;
   gap: 6px;
 }
+.plan__recharger {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  z-index: 800;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+.plan__recharger:active {
+  transform: translateX(-50%) translateY(1px);
+}
 .plan__outils .bouton {
   box-shadow: var(--ombre);
 }

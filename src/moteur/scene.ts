@@ -19,10 +19,14 @@ import {
 import { type Emprise, COUCHE_CLASSES, COUCHE_MNS, COUCHE_MNT, COUCHE_RGE_ALTI, empriseCalee, urlAltitudes, urlBatiments, urlImage } from '../donnees/ign';
 
 export interface Acces {
-  /** Tampon binaire (mis en cache). */
-  binaire(url: string, service: string): Promise<ArrayBuffer>;
+  /**
+   * Tampon binaire (mis en cache). `facultatif` : couche dont on peut se passer
+   * (relief lointain, classes) ; elle a droit à moins de patience pour ne pas
+   * retarder le premier résultat quand le service traîne.
+   */
+  binaire(url: string, service: string, facultatif?: boolean): Promise<ArrayBuffer>;
   /** Image décodée en RGBA (mise en cache). */
-  image(url: string, largeur: number, hauteur: number, service: string): Promise<Uint8ClampedArray | Uint8Array>;
+  image(url: string, largeur: number, hauteur: number, service: string, facultatif?: boolean): Promise<Uint8ClampedArray | Uint8Array>;
   json(url: string, service: string): Promise<unknown>;
 }
 
@@ -108,11 +112,11 @@ export async function chargerScene(
   // Les autres couches partent tout de suite ; elles ne servent que si le LiDAR existe ici.
   const suite = Promise.allSettled([
     acces.binaire(urlAltitudes(COUCHE_MNT, eMnt0), SERVICE_ALTI),
-    acces.binaire(urlAltitudes(COUCHE_MNS, e1), SERVICE_ALTI),
-    acces.binaire(urlAltitudes(COUCHE_MNS, e2), SERVICE_ALTI),
-    acces.binaire(urlAltitudes(COUCHE_MNT, eMnt1), SERVICE_ALTI),
-    acces.image(urlImage(COUCHE_CLASSES, e0, 'image/png'), e0.largeur, e0.hauteur, 'de classification LiDAR HD'),
-    acces.image(urlImage(COUCHE_CLASSES, e1, 'image/png'), e1.largeur, e1.hauteur, 'de classification LiDAR HD'),
+    acces.binaire(urlAltitudes(COUCHE_MNS, e1), SERVICE_ALTI, true),
+    acces.binaire(urlAltitudes(COUCHE_MNS, e2), SERVICE_ALTI, true),
+    acces.binaire(urlAltitudes(COUCHE_MNT, eMnt1), SERVICE_ALTI, true),
+    acces.image(urlImage(COUCHE_CLASSES, e0, 'image/png'), e0.largeur, e0.hauteur, 'de classification LiDAR HD', true),
+    acces.image(urlImage(COUCHE_CLASSES, e1, 'image/png'), e1.largeur, e1.hauteur, 'de classification LiDAR HD', true),
   ]);
 
   const mns0 = versRaster(await pMns0, e0);
@@ -178,7 +182,7 @@ export async function chargerScene(
   }
   let classes0: Uint8Array | null = null;
   if (rCl0.status === 'fulfilled') classes0 = decoderClasses(rCl0.value, e0.largeur * e0.hauteur);
-  else avertissements.push('La carte de classification LiDAR est indisponible : les arbres ne sont pas distingués des bâtiments et comptent comme des obstacles opaques.');
+  else avertissements.push('La carte de classification LiDAR est indisponible : les arbres ne sont pas distingués des bâtiments et comptent comme des obstacles opaques. Relancez la recherche pour réessayer.');
   progression('Séparation des arbres et des bâtiments…');
   const s0 = construireSurfaces(mns0, mnt0, classes0);
   const niveaux: Niveau[] = [{ dur: s0.dur, arbres: classes0 ? s0.arbres : null }];
@@ -203,14 +207,14 @@ export async function chargerScene(
       niveaux.push({ dur: copie, arbres: null });
     }
   } else {
-    avertissements.push('Le relief au-delà de 250 m n’a pas pu être téléchargé : les obstacles lointains sont ignorés.');
+    avertissements.push('Le relief au-delà de 250 m n’a pas pu être téléchargé : les obstacles lointains sont ignorés. Relancez la recherche pour réessayer.');
   }
   if (rMns2.status === 'fulfilled') {
     const mns2 = versRaster(rMns2.value, e2);
     boucherTrous(mns2);
     niveaux.push({ dur: mns2, arbres: null });
   } else if (rMns1.status === 'fulfilled') {
-    avertissements.push('Le relief au-delà de 1 km n’a pas pu être téléchargé : les obstacles très lointains sont ignorés.');
+    avertissements.push('Le relief au-delà de 1 km n’a pas pu être téléchargé : les obstacles très lointains sont ignorés. Relancez la recherche pour réessayer.');
   }
 
   progression('Analyse des façades…');

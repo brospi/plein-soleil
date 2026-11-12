@@ -22,6 +22,7 @@ import { GrapheJournee, phraseCreneaux } from './graphiques/journee';
 import { GrapheEtages } from './graphiques/etages';
 import { GrapheCourse } from './graphiques/course';
 import { annoncer, dateLongue, differer, duree, el, nombre, nomEtage, orientation, orientationAbregee, parId, pourcent } from './outils';
+import { PORTEE_FENETRE, horsZone } from './zone';
 import type { Vue3D } from './vue3d';
 
 const EXEMPLES: Array<{ nom: string; libelle: string; lon: number; lat: number }> = [
@@ -39,6 +40,8 @@ export function demarrer(): void {
   const etagesConnus = new Map<string, ResultatEtage[]>();
   let jeton = 0;
   let jetonScene = 0;
+  /** Centre de la dernière zone demandée au moteur (chargée ou en cours de chargement). */
+  let centreDemande: { x: number; y: number } | null = null;
   let modeAjout = false;
   let altitudeEnAttente: number | null = null;
   let jour = indexDuJour(new Date().getMonth() + 1, Math.min(28, new Date().getDate()));
@@ -52,6 +55,8 @@ export function demarrer(): void {
   const blocFenetre = parId('bloc-fenetre');
   const blocResultats = parId('resultats');
   const accueil = parId('accueil');
+  const boutonRecharger = parId<HTMLButtonElement>('plan-recharger');
+  const AIDE_CARTE = 'Touchez un mur orange pour y placer la fenêtre. Les murs mitoyens, en pointillés gris, ne sont pas proposés. Si l’immeuble est plus loin, déplacez la carte : ses bâtiments se chargent en chemin.';
   const comparateur = new Comparateur();
   parId('methode-contenu').innerHTML = METHODE_HTML;
 
@@ -83,6 +88,8 @@ export function demarrer(): void {
   async function chargerAdresse(): Promise<void> {
     if (!etat.adresse) return;
     const moi = ++jetonScene;
+    centreDemande = { x: etat.adresse.x, y: etat.adresse.y };
+    boutonRecharger.hidden = true;
     scene = null;
     resultat = null;
     etagesConnus.clear();
@@ -108,7 +115,7 @@ export function demarrer(): void {
       if (!s.aretes.some((a) => a.statut === 'libre')) {
         etatChargement('Aucun bâtiment n’a été trouvé autour de cette adresse. Vérifiez l’adresse ou déplacez la carte.', true);
       }
-      parId('carte-aide').textContent = 'Touchez un mur orange pour y placer la fenêtre. Les murs mitoyens, en pointillés gris, ne sont pas proposés.';
+      parId('carte-aide').textContent = AIDE_CARTE;
       if (vue3dVisible) void preparer3D(true);
       if (etat.fenetres.length) {
         blocFenetre.hidden = false;
@@ -121,6 +128,67 @@ export function demarrer(): void {
       etatChargement(err.message, true);
     }
   }
+
+  /* ---------- Rechargement quand la carte s'éloigne de la zone chargée ---------- */
+  /**
+   * Charge les bâtiments et le relief autour d'un nouveau centre, sans toucher
+   * à la vue de la carte. Les murs déjà affichés restent en place jusqu'à
+   * l'arrivée des nouveaux.
+   */
+  async function rechargerZone(x: number, y: number): Promise<void> {
+    if (!etat.adresse) return;
+    const moi = ++jetonScene;
+    centreDemande = { x, y };
+    boutonRecharger.hidden = true;
+    etatChargement('Chargement des bâtiments de cette zone…');
+    try {
+      const s = await moteur.charger({ x, y, etages: { hauteurEtage: etat.reglages.hauteurEtage, hauteurCentre: etat.reglages.allege + 0.8 } });
+      if (moi !== jetonScene) return;
+      scene = s;
+      etat.adresse = { ...etat.adresse, x, y };
+      etagesConnus.clear();
+      // Les fenêtres restées trop loin du nouveau centre ne peuvent plus être calculées ici.
+      const avant = etat.fenetres.length;
+      etat.fenetres = etat.fenetres.filter((f) => Math.hypot(f.x - x, f.y - y) <= PORTEE_FENETRE);
+      etat.actif = Math.max(0, Math.min(etat.actif, etat.fenetres.length - 1));
+      if (etat.fenetres.length < avant) annoncer(avant - etat.fenetres.length > 1 ? 'Les fenêtres de l’ancienne zone ont été retirées.' : 'La fenêtre de l’ancienne zone a été retirée.');
+      etatChargement(null);
+      carte.afficherScene(s);
+      carte.afficherFenetres(etat.fenetres, etat.actif);
+      afficherAvertissements();
+      document.querySelectorAll<HTMLInputElement>('input[name="arbres"]').forEach((r) => (r.disabled = s.mode === 'bdtopo'));
+      if (!s.aretes.some((a) => a.statut === 'libre')) etatChargement('Aucun bâtiment n’a été trouvé dans cette zone. Déplacez la carte vers un immeuble.', true);
+      majURL();
+      if (vue3dVisible) void preparer3D(true);
+      if (etat.fenetres.length) await lancerCalcul();
+      else {
+        resultat = null;
+        blocResultats.hidden = true;
+        blocFenetre.hidden = true;
+      }
+    } catch (e) {
+      if (moi !== jetonScene) return;
+      // La zone précédente reste affichée et utilisable.
+      centreDemande = scene ? { x: scene.x, y: scene.y } : null;
+      etatChargement((e as Error).message, true);
+    }
+  }
+
+  // Sans fenêtre placée, la zone suit la carte toute seule. Avec une fenêtre, on demande
+  // d'abord : recharger ailleurs retire les fenêtres restées hors de portée.
+  carte.surDeplacement = differer((c: { x: number; y: number; zoom: number }) => {
+    if (!etat.adresse || !centreDemande) return;
+    if (!horsZone(c, centreDemande)) {
+      boutonRecharger.hidden = true;
+      return;
+    }
+    if (etat.fenetres.length === 0) void rechargerZone(c.x, c.y);
+    else boutonRecharger.hidden = false;
+  }, 450);
+  boutonRecharger.addEventListener('click', () => {
+    const c = carte.centre();
+    void rechargerZone(c.x, c.y);
+  });
 
   function afficherAvertissements(): void {
     const racine = parId('avertissements');
@@ -659,9 +727,10 @@ export function demarrer(): void {
     parId('vue3d').hidden = !troisD;
     parId('fond-bouton').hidden = troisD;
     plan.classList.toggle('plan--3d', troisD);
+    if (troisD) boutonRecharger.hidden = true;
     parId('carte-aide').textContent = troisD
       ? 'Faites glisser pour tourner, pincez ou utilisez la molette pour zoomer. Touchez une façade pour y placer la fenêtre à la hauteur exacte.'
-      : 'Touchez un mur orange pour y placer la fenêtre. Les murs mitoyens, en pointillés gris, ne sont pas proposés.';
+      : AIDE_CARTE;
     if (troisD) void preparer3D(vue3d !== null && vue3d.sceneCourante !== scene).then(() => vue3d?.redimensionner());
     else carte.redimensionner();
   }
@@ -746,6 +815,11 @@ export function demarrer(): void {
     etat: () => etat,
     resultat: () => resultat,
     scene: () => scene,
+    /** Déplace la carte de (dx, dy) mètres vers l'est et le nord, comme le ferait un glissement. */
+    deplacerCarte: (dx: number, dy: number) => {
+      const c = carte.centre();
+      carte.centrer(c.x + dx, c.y + dy, c.zoom);
+    },
     /** Murs libres dès le rez-de-chaussée, du plus proche de l'adresse au plus lointain, avec leur position à l'écran. */
     murs: () => {
       if (!scene || !etat.adresse) return [];

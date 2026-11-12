@@ -30,21 +30,23 @@ function surAttente(a: Attente): void {
   envoyer({ id: -1, progression: `Service ${a.service} : ${cause}. Nouvelle tentative dans ${Math.round(a.delaiMs / 1000)} s (essai ${a.essai + 1})…` });
 }
 
-async function avecCache(url: string, service: string, type: string): Promise<ArrayBuffer> {
+async function avecCache(url: string, service: string, type: string, facultatif = false): Promise<ArrayBuffer> {
   const connu = await cache.lire(url);
   if (connu) {
     depuisCache++;
     return connu;
   }
-  const tampon = await requeteBinaire(url, { service, surAttente }, type);
+  // Couche facultative : deux essais de 8 s au plus, puis le calcul continue sans elle.
+  const options = facultatif ? { service, surAttente, essais: 2, expirationMs: 8000 } : { service, surAttente };
+  const tampon = await requeteBinaire(url, options, type);
   telechargees++;
   void cache.ecrire(url, tampon);
   return tampon;
 }
 
 const acces: Acces = {
-  binaire: (url, service) => avecCache(url, service, 'image/x-bil'),
-  image: async (url, _l, _h, service) => (await decoderPng(await avecCache(url, service, 'image/png'))).rgba,
+  binaire: (url, service, facultatif) => avecCache(url, service, 'image/x-bil', facultatif),
+  image: async (url, _l, _h, service, facultatif) => (await decoderPng(await avecCache(url, service, 'image/png', facultatif))).rgba,
   json: (url, service) => requeteJson(url, { service, surAttente }),
 };
 
@@ -52,14 +54,17 @@ let scene: SceneChargee | null = null;
 let calculateur: Calculateur | null = null;
 let table: TableSolaire | null = null;
 let cleTable = '';
+let numeroChargement = 0;
 
 async function charger(r: Extract<Requete, { type: 'charger' }>): Promise<InfoScene> {
   const t0 = performance.now();
   depuisCache = 0;
   telechargees = 0;
-  scene = null;
-  calculateur = null;
-  const s = await chargerScene(r.x, r.y, acces, r.etages, (m) => envoyer({ id: -1, progression: m }));
+  // La scène précédente reste utilisable pendant le téléchargement ; si une demande plus
+  // récente arrive entre-temps, celle-ci est abandonnée pour ne pas l'écraser.
+  const moi = ++numeroChargement;
+  const s = await chargerScene(r.x, r.y, acces, r.etages, (m) => moi === numeroChargement && envoyer({ id: -1, progression: m }));
+  if (moi !== numeroChargement) throw new Error('Chargement remplacé par une demande plus récente.');
   const geo = depuisLambert93(r.x, r.y);
   const cle = `${geo.lat.toFixed(2)}|${geo.lon.toFixed(2)}`;
   if (!table || cle !== cleTable) {

@@ -1,6 +1,7 @@
 /**
  * Requêtes HTTP avec relances espacées et messages d'erreur précis.
- * Les services de l'IGN répondent parfois 429 (limite de débit) ou 502/503/504.
+ * Les services de l'IGN répondent parfois 429 (limite de débit), 502/503/504,
+ * voire 400 sur une requête valide.
  */
 
 export class ErreurReseau extends Error {
@@ -33,6 +34,7 @@ export interface OptionsRequete {
 }
 
 const DELAIS = [1200, 3000, 7000, 12000];
+const RELANCABLES = new Set([400, 408, 429]);
 
 function pause(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -59,14 +61,20 @@ export async function requete(url: string, o: OptionsRequete): Promise<Response>
   for (let essai = 1; essai <= essais; essai++) {
     // Une requête restée sans réponse est abandonnée puis relancée.
     const garde = new AbortController();
-    const minuterie = setTimeout(() => garde.abort(), o.expirationMs ?? 20_000);
+    // Les services répondent d'ordinaire en 1 à 2 s : premier essai court, suivants plus patients.
+    const minuterie = setTimeout(() => garde.abort(), o.expirationMs ?? (essai === 1 ? 10_000 : 15_000));
     const annuler = (): void => garde.abort();
     o.signal?.addEventListener('abort', annuler);
     try {
-      const r = await fetch(url, { signal: garde.signal });
+      // Les erreurs de l'IGN portent un en-tête de cache de 21 jours : sans précaution, le
+      // navigateur resservirait l'erreur à chaque relance. Dès le deuxième essai, on impose
+      // un aller-retour réseau, qui remplace aussi l'entrée fautive du cache.
+      const r = await fetch(url, { signal: garde.signal, cache: essai === 1 ? 'default' : 'reload' });
       if (r.ok) return new Response(await r.arrayBuffer(), { status: r.status, headers: r.headers });
       dernierStatut = r.status;
-      if (r.status !== 429 && r.status < 500) break; // erreur définitive (400, 404…)
+      // Les services de l'IGN renvoient parfois un 400 éclair sur une requête pourtant valide
+      // (constaté : la même URL passe à la relance). Seuls 401, 403, 404… sont définitifs.
+      if (!RELANCABLES.has(r.status) && r.status < 500) break;
       if (essai < essais) {
         const retryAfter = Number(r.headers.get('Retry-After'));
         const delaiMs = Math.min(o.delaiMaxMs ?? 15000, retryAfter > 0 ? retryAfter * 1000 : DELAIS[essai - 1] ?? 12000);

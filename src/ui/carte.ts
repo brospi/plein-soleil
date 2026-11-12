@@ -31,6 +31,8 @@ export class Carte {
   private scene: InfoScene | null = null;
   surMur: (c: ChoixMur) => void = () => {};
   surMurRefuse: () => void = () => {};
+  /** Appelé à la fin de chaque déplacement ou zoom, avec le centre de la carte en Lambert 93. */
+  surDeplacement: (c: { x: number; y: number; zoom: number }) => void = () => {};
 
   constructor(conteneur: HTMLElement) {
     this.carte = L.map(conteneur, { zoomControl: true, attributionControl: true, maxZoom: 21, minZoom: 5, zoomSnap: 0.5 }).setView([46.6, 2.4], 6);
@@ -46,6 +48,7 @@ export class Carte {
       if (proche) this.surMur(proche);
       else if (this.scene && this.murProche(ev.latlng, 16, true)) this.surMurRefuse();
     });
+    this.carte.on('moveend', () => this.surDeplacement(this.centre()));
     this.carte.on('mousemove', (ev) => {
       const proche = this.murProche(ev.latlng, 12);
       if (proche) {
@@ -87,6 +90,12 @@ export class Carte {
 
   centrer(x: number, y: number, zoom = 19): void {
     this.carte.setView(this.latLng(x, y), zoom);
+  }
+
+  /** Centre de la carte en Lambert 93, et niveau de zoom. */
+  centre(): { x: number; y: number; zoom: number } {
+    const c = this.carte.getCenter();
+    return { ...versLambert93(c.lng, c.lat), zoom: this.carte.getZoom() };
   }
 
   /** Position à l'écran (pixels dans le conteneur de la carte) d'un point Lambert 93. */

@@ -3,10 +3,13 @@
  * l'IGN (réseau requis). Trois villes : Paris, petite couronne, Lyon ; plus
  * Lille pour le repli sans LiDAR HD.
  */
+import { createServer } from 'node:http';
+import { type AddressInfo } from 'node:net';
 import { expect, test, type Page } from '@playwright/test';
 
 interface Api {
-  scene(): { mode: string; avertissements: string[] } | null;
+  scene(): { mode: string; avertissements: string[]; x: number; y: number } | null;
+  deplacerCarte(dx: number, dy: number): void;
   resultat(): {
     dureeMs: number;
     fenetres: Array<{
@@ -159,6 +162,107 @@ test('partage par lien, comparateur, exports et vue 3D', async ({ page, context 
   await expect(page.locator('#v3-date-texte')).not.toBeEmpty();
 
   expect(erreurs, erreurs.join('\n')).toEqual([]);
+});
+
+test('déplacer la carte charge les bâtiments de la nouvelle zone', async ({ page }) => {
+  const erreurs = surveiller(page);
+  const a = ADRESSES[0];
+  await chercher(page, a.saisie, a.attendu);
+  const depart = await page.evaluate(() => ({ x: window.pleinSoleil.scene()!.x, y: window.pleinSoleil.scene()!.y }));
+
+  // Sans fenêtre placée : la zone suit la carte toute seule.
+  await page.evaluate(() => window.pleinSoleil.deplacerCarte(230, 0));
+  await page.waitForFunction((x0) => Math.abs((window.pleinSoleil.scene()?.x ?? x0) - x0) > 200, depart.x, { timeout: 60_000 });
+  await expect(page.locator('#etat-chargement')).toBeHidden();
+  await expect(page.locator('#plan-recharger')).toBeHidden();
+  // Les murs de la nouvelle zone sont cliquables, là où il n'y en avait pas avant.
+  const proche = await page.evaluate(() => window.pleinSoleil.murs()[0].distance);
+  expect(proche).toBeLessThan(80);
+  await cliquerMur(page);
+  const heures = await page.evaluate(() => window.pleinSoleil.resultat()!.fenetres[0].detail?.indicateurs.heuresAn ?? -1);
+  expect(heures).toBeGreaterThanOrEqual(0);
+  expect(page.url()).toContain('#l=');
+
+  // Avec une fenêtre placée : rien ne se recharge sans accord, les résultats restent.
+  const milieu = await page.evaluate(() => window.pleinSoleil.scene()!.x);
+  await page.evaluate(() => window.pleinSoleil.deplacerCarte(0, 260));
+  await expect(page.locator('#plan-recharger')).toBeVisible();
+  expect(await page.evaluate(() => window.pleinSoleil.scene()!.x)).toBe(milieu);
+  await expect(page.locator('#resultats')).toBeVisible();
+  // Revenir près de la zone fait disparaître la proposition.
+  await page.evaluate(() => window.pleinSoleil.deplacerCarte(0, -260));
+  await expect(page.locator('#plan-recharger')).toBeHidden();
+  // Accepter : la zone est rechargée et la fenêtre devenue hors de portée est retirée.
+  await page.evaluate(() => window.pleinSoleil.deplacerCarte(0, 260));
+  await page.locator('#plan-recharger').click();
+  await page.waitForFunction(() => window.pleinSoleil.etat().fenetres.length === 0, undefined, { timeout: 60_000 });
+  await expect(page.locator('#resultats')).toBeHidden();
+  await expect(page.locator('#annonce')).toContainText('retirée');
+  expect(erreurs, erreurs.join('\n')).toEqual([]);
+});
+
+test('erreurs passagères de l’IGN (400 mis en cache, 429) : relance annoncée puis chargement', async ({ page, context }) => {
+  const erreurs = surveiller(page);
+  // L'IGN renvoie parfois un 400 éclair, avec un cache de 21 jours, sur une requête valide ;
+  // on le simule sur le premier appel au relief fin, et un 429 sur le premier appel aux bâtiments.
+  let refusMns = 0;
+  let refusWfs = 0;
+  await context.route(/wms-r\/wms.*LIDAR-HD_MNS.*WIDTH=1024/, async (route) => {
+    if (refusMns++ === 0) {
+      await route.fulfill({ status: 400, contentType: 'text/xml', headers: { 'Cache-Control': 'private, max-age=1814400', 'Access-Control-Allow-Origin': '*' }, body: '<ServiceExceptionReport/>' });
+    } else {
+      await route.continue();
+    }
+  });
+  await context.route(/wfs\/ows/, async (route) => {
+    if (refusWfs++ === 0) await route.fulfill({ status: 429, headers: { 'Retry-After': '1', 'Access-Control-Allow-Origin': '*' }, body: '' });
+    else await route.continue();
+  });
+  const a = ADRESSES[0];
+  await page.goto('./');
+  await page.getByLabel('Adresse du logement').fill(a.saisie);
+  const premiere = page.locator('#suggestions li[role="option"]').first();
+  await expect(premiere).toBeVisible({ timeout: 20_000 });
+  await premiere.dispatchEvent('pointerdown');
+  // La relance est annoncée à l'utilisateur, puis la scène se charge normalement.
+  await expect(page.locator('#etat-chargement')).toContainText(/Nouvelle tentative/, { timeout: 10_000 });
+  await page.waitForFunction(() => window.pleinSoleil.scene() !== null, undefined, { timeout: 60_000 });
+  expect(await page.evaluate(() => window.pleinSoleil.scene()!.mode)).toBe('lidar');
+  expect(refusMns).toBeGreaterThanOrEqual(2);
+  expect(refusWfs).toBeGreaterThanOrEqual(2);
+  await cliquerMur(page);
+  expect(erreurs, erreurs.join('\n')).toEqual([]);
+});
+
+test('une erreur mise en cache par le navigateur est contournée par la relance', async ({ page }) => {
+  // Serveur local qui imite l'IGN : un 400 « cachable 21 jours » au premier appel, 200 ensuite.
+  let appels = 0;
+  const serveur = createServer((_req, res) => {
+    appels++;
+    res.writeHead(appels === 1 ? 400 : 200, { 'Cache-Control': 'private, max-age=1814400', 'Access-Control-Allow-Origin': '*', 'Content-Type': 'text/plain' });
+    res.end(appels === 1 ? 'erreur' : 'relief');
+  });
+  await new Promise<void>((pret) => serveur.listen(0, '127.0.0.1', pret));
+  const url = `http://127.0.0.1:${(serveur.address() as AddressInfo).port}/tuile`;
+  try {
+    await page.goto('./');
+    const statuts = await page.evaluate(async (u) => {
+      const lire = async (cache: RequestCache) => (await fetch(u, { cache })).status;
+      // Même séquence que le module réseau : premier essai normal, relance en mode « reload ».
+      const premier = await lire('default');
+      const sansPrecaution = await lire('default');
+      const relance = await lire('reload');
+      const ensuite = await lire('default');
+      return { premier, sansPrecaution, relance, ensuite };
+    }, url);
+    console.log(`  statuts : ${JSON.stringify(statuts)}, appels réellement reçus par le serveur : ${appels}`);
+    expect(statuts.premier).toBe(400);
+    // La relance atteint le serveur, obtient la donnée, et répare l'entrée du cache.
+    expect(statuts.relance).toBe(200);
+    expect(statuts.ensuite).toBe(200);
+  } finally {
+    serveur.close();
+  }
 });
 
 test('zone sans LiDAR HD : repli annoncé clairement (Lille)', async ({ page }) => {
