@@ -28,7 +28,7 @@ npm test           # tests unitaires (Vitest)
 npm run test:e2e   # tests de bout en bout (Playwright, services IGN réels)
 ```
 
-Les tests de bout en bout demandent une première fois `npx playwright install chromium`. Les tests d'intégration du moteur sur données réelles, hors navigateur, se lancent avec `RESEAU=1 npx vitest run tests/reel.test.ts`.
+Les tests de bout en bout demandent une première fois `npx playwright install chromium`. Pour les lancer contre un site déjà déployé : `BASE_URL=https://brospi.github.io/plein-soleil/ npm run test:e2e`. Les tests d'intégration du moteur sur données réelles, hors navigateur, se lancent avec `RESEAU=1 npx vitest run tests/reel.test.ts`.
 
 ## Architecture
 

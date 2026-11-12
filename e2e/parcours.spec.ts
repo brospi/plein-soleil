@@ -41,7 +41,7 @@ function surveiller(page: Page): string[] {
 
 /** Recherche une adresse et attend la scène ; renvoie la durée entre le choix de l'adresse et la scène prête. */
 async function chercher(page: Page, saisie: string, attendu: RegExp): Promise<number> {
-  await page.goto('/');
+  await page.goto('./');
   await page.getByLabel('Adresse du logement').fill(saisie);
   const premiere = page.locator('#suggestions li[role="option"]').first();
   await expect(premiere).toBeVisible({ timeout: 20_000 });

@@ -1,5 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
 
+// BASE_URL permet de viser un site déjà déployé (par exemple la démo GitHub Pages).
+const distant = process.env.BASE_URL;
+
 export default defineConfig({
   testDir: 'e2e',
   timeout: 120_000,
@@ -7,12 +10,14 @@ export default defineConfig({
   retries: 1,
   workers: 1,
   reporter: [['list']],
-  use: { baseURL: 'http://localhost:4173', locale: 'fr-FR', trace: 'retain-on-failure' },
+  use: { baseURL: distant ?? 'http://localhost:4173/', locale: 'fr-FR', trace: 'retain-on-failure' },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
-  webServer: {
-    command: 'npm run build && npm run preview',
-    url: 'http://localhost:4173',
-    reuseExistingServer: true,
-    timeout: 180_000,
-  },
+  webServer: distant
+    ? undefined
+    : {
+        command: 'npm run build && npm run preview',
+        url: 'http://localhost:4173',
+        reuseExistingServer: true,
+        timeout: 180_000,
+      },
 });
