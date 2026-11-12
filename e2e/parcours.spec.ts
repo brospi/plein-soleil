@@ -235,6 +235,8 @@ test('erreurs passagères de l’IGN (400 mis en cache, 429) : relance annoncée
 });
 
 test('une erreur mise en cache par le navigateur est contournée par la relance', async ({ page }) => {
+  // Une page HTTPS ne peut pas interroger un serveur HTTP local : test réservé au site servi en local.
+  test.skip(!!process.env.BASE_URL, 'serveur local injoignable depuis un site distant en HTTPS');
   // Serveur local qui imite l'IGN : un 400 « cachable 21 jours » au premier appel, 200 ensuite.
   let appels = 0;
   const serveur = createServer((_req, res) => {
