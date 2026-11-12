@@ -15,6 +15,7 @@ import { Etat } from '../coeur/simulation';
 import { lisserRelief, maillerRelief } from '../coeur/maillage';
 import { type Raster, valeurLisse } from '../coeur/raster';
 import { Classe } from '../coeur/classification';
+import { areteLaPlusProche } from '../coeur/facades';
 
 const moi = self as unknown as DedicatedWorkerGlobalScope;
 
@@ -93,7 +94,14 @@ async function charger(r: Extract<Requete, { type: 'charger' }>): Promise<InfoSc
 function calculer(r: Extract<Requete, { type: 'calculer' }>): { resultat: ResultatCalcul; transfert: Transferable[] } {
   if (!calculateur) throw new Error('Aucune adresse chargée.');
   const t0 = performance.now();
-  const fenetres = r.fenetres.map((f, i) => calculateur!.calculer(f, r.reglages, i === r.actif && r.tous));
+  // Chaque fenêtre est rattachée à son bâtiment pour connaître son nombre de niveaux (BD TOPO).
+  const aretes = scene?.aretes ?? [];
+  const batiments = scene?.batiments ?? [];
+  const fenetres = r.fenetres.map((f, i) => {
+    const mur = areteLaPlusProche(aretes, f.x, f.y, 1, (a) => a.nx * f.nx + a.ny * f.ny > 0.9);
+    const batiment = mur ? batiments[mur.arete.bat] : undefined;
+    return calculateur!.calculer({ ...f, niveauxConnus: batiment?.etages ?? null, hauteurConnue: batiment?.hauteur ?? null }, r.reglages, i === r.actif && r.tous);
+  });
   let cumul: Cumul | null = null;
   const details = fenetres.map((f) => f.detail).filter((d) => d !== null);
   if (fenetres.length > 1 && details.length > 0) {

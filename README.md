@@ -60,6 +60,7 @@ e2e/          tests de bout en bout
 - **Deux horizons**, bâti et arbres, grâce à la carte de classes LiDAR HD (`IGNF_LIDAR-HD_CLASS`).
 - **La fenêtre est une surface** : 2 à 6 points en largeur et en hauteur ; l'embrasure et le balcon sont traités analytiquement, les obstacles lointains par échantillonnage.
 - **Position du mur relue sur le LiDAR** à chaque étage le long de la normale (décalage cadastre / LiDAR de 1 à 2 m, étages en retrait), point d'observation 50 cm devant.
+- **Hauteur d'étage calée par immeuble.** Quand la BD TOPO donne le nombre de niveaux du bâtiment (environ 80 % des cas à Paris), la hauteur d'étage est la hauteur de l'immeuble divisée par ce nombre, si le résultat est plausible (2,4 à 4,2 m). Entre la hauteur LiDAR (toit compris) et la hauteur BD TOPO (à la gouttière), on retient celle qui donne l'étage le plus proche de la valeur par défaut. Sinon : 3 m par étage. Le réglage est désactivable et une saisie manuelle l'emporte.
 - **Azimuts « grille »** : le soleil est ramené dans le repère Lambert 93 par la convergence des méridiens (−0,5° à Paris, +3,4° à Strasbourg).
 
 ## Données (appelées directement par le navigateur)
@@ -85,6 +86,7 @@ Tests unitaires (`npm test`) :
 - **Soleil** : 13 instants comparés à l'algorithme SPA du NREL (via pvlib), écart < 0,05° ; exemple de la publication SPA ; levers et couchers à Paris aux solstices ; changement d'heure.
 - **Lambert 93** : 8 points comparés à PROJ, écart < 5 mm ; convergence des méridiens.
 - **Lancer de rayons** : mur de hauteur et distance connues ; comparaison à une intersection exhaustive rayon-cellule sur un relief aléatoire ; passage entre niveaux de résolution.
+- **Étages** : calage sur le nombre de niveaux connu, rejet des nombres incohérents, choix entre toit LiDAR et gouttière, liens de partage anciens inchangés.
 - **Façades** : normale sortante quel que soit le sens de l'anneau, cours intérieures, murs mitoyens, voisin plus bas, décalage cadastre / LiDAR de 1,5 m, étage en retrait.
 - **Ordres de grandeur** (Paris, immeuble isolé) : façade sud ≈ 3 600 h/an, nord ≈ 800 h/an, sud + nord = durée du jour, est ≈ ouest ; l'ensoleillement croît avec l'étage dans une rue de 10 m ; recalcul d'un étage < 100 ms.
 - **Arbres, classification, maillage, exports, état partagé par URL.**

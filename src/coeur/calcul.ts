@@ -18,7 +18,10 @@ export interface Scene {
 }
 
 export interface Reglages {
+  /** Hauteur d'étage par défaut (m), utilisée quand le calage est impossible ou désactivé. */
   hauteurEtage: number;
+  /** Caler la hauteur d'étage sur le nombre de niveaux connu du bâtiment (BD TOPO) quand il est plausible. */
+  hauteurEtageAuto: boolean;
   /** Hauteur de l'appui de fenêtre au-dessus du plancher (m). */
   allege: number;
   arbres: ModeArbres;
@@ -28,6 +31,7 @@ export interface Reglages {
 
 export const REGLAGES_DEFAUT: Reglages = {
   hauteurEtage: 3,
+  hauteurEtageAuto: true,
   allege: 0.9,
   arbres: ModeArbres.Feuillus,
   transmissionHiver: 0.5,
@@ -45,6 +49,10 @@ export interface SpecFenetre {
   hauteurLibre: number | null;
   /** Altitude NGF exacte du centre (clic en 3D) ; prioritaire sur tout le reste. */
   altitude?: number | null;
+  /** Nombre de niveaux du bâtiment d'après la BD TOPO, rez-de-chaussée compris (renseigné par le moteur). */
+  niveauxConnus?: number | null;
+  /** Hauteur du bâtiment à la gouttière d'après la BD TOPO (renseignée par le moteur). */
+  hauteurConnue?: number | null;
   geometrie: GeometrieFenetre;
 }
 
@@ -62,6 +70,14 @@ export interface ResultatFenetre {
   toit: number;
   /** Azimut « grille » de la normale (degrés). */
   azNormale: number;
+  /** Hauteur d'étage retenue (m) et son origine. */
+  hauteurEtage: number;
+  calage: 'bdtopo' | 'defaut';
+  /** Hauteur de bâtiment divisée par le nombre de niveaux, et d'où elle vient (toit LiDAR ou gouttière BD TOPO). */
+  hauteurCalage: number;
+  baseCalage: 'lidar' | 'gouttiere' | null;
+  /** Nombre de niveaux du bâtiment d'après la BD TOPO, s'il est connu (même quand il n'a pas été retenu). */
+  niveauxConnus: number | null;
   etages: ResultatEtage[];
   /** Étage (ou hauteur libre) détaillé. */
   detail: ResultatSimulation | null;
@@ -154,6 +170,8 @@ export class Calculateur {
     return analyserPoint(this.scene.relief, s.x, s.y, s.nx, s.ny, {
       hauteurEtage: r.hauteurEtage,
       hauteurCentre: r.allege + s.geometrie.hauteur / 2,
+      niveauxConnus: r.hauteurEtageAuto ? (s.niveauxConnus ?? null) : null,
+      hauteurConnue: s.hauteurConnue ?? null,
     });
   }
 
@@ -196,7 +214,7 @@ export class Calculateur {
       decalage = decalageDuMur(scene.relief, s.x, s.y, s.nx, s.ny, zDetail);
     } else {
       const e = an.etages[s.etage];
-      zDetail = an.sol + s.etage * r.hauteurEtage + r.allege + s.geometrie.hauteur / 2;
+      zDetail = an.sol + s.etage * an.hauteurEtage + r.allege + s.geometrie.hauteur / 2;
       decalage = e ? e.decalage : null;
     }
     let detail: ResultatSimulation | null = null;
@@ -204,7 +222,9 @@ export class Calculateur {
     let horizon: ResultatFenetre['horizon'] = null;
     let motif: ResultatFenetre['motif'] = 'ok';
     if (decalage === null) {
-      motif = an.etages.length === 0 || zDetail > an.toit ? 'hors-batiment' : 'mitoyen';
+      // Au-dessus du dernier niveau détecté (ou trop près du toit), il n'y a pas d'étage : ce n'est pas un mur mitoyen.
+      const horsNiveaux = s.hauteurLibre === null && s.altitude == null && s.etage >= an.etages.length;
+      motif = an.etages.length === 0 || horsNiveaux || zDetail > an.toit - 0.6 ? 'hors-batiment' : 'mitoyen';
     } else {
       const th = performance.now();
       decalage = this.origine(s, decalage, zDetail, refs);
@@ -227,6 +247,11 @@ export class Calculateur {
       sol: an.sol,
       toit: an.toit,
       azNormale: az,
+      hauteurEtage: an.hauteurEtage,
+      calage: an.cale ? 'bdtopo' : 'defaut',
+      hauteurCalage: an.calage.hauteurBatiment,
+      baseCalage: an.calage.base,
+      niveauxConnus: s.niveauxConnus ?? null,
       etages,
       detail,
       hauteurDetail: zDetail - an.sol,

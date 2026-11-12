@@ -104,7 +104,7 @@ export function demarrer(): void {
     etatChargement('Téléchargement du relief LiDAR HD et des bâtiments…');
     majURL();
     try {
-      const s = await moteur.charger({ x: etat.adresse.x, y: etat.adresse.y, etages: { hauteurEtage: etat.reglages.hauteurEtage, hauteurCentre: etat.reglages.allege + 0.8 } });
+      const s = await moteur.charger({ x: etat.adresse.x, y: etat.adresse.y, etages: { hauteurEtage: etat.reglages.hauteurEtage, hauteurCentre: etat.reglages.allege + 0.8, caler: etat.reglages.hauteurEtageAuto } });
       if (moi !== jetonScene) return;
       scene = s;
       etatChargement(null);
@@ -142,7 +142,7 @@ export function demarrer(): void {
     boutonRecharger.hidden = true;
     etatChargement('Chargement des bâtiments de cette zone…');
     try {
-      const s = await moteur.charger({ x, y, etages: { hauteurEtage: etat.reglages.hauteurEtage, hauteurCentre: etat.reglages.allege + 0.8 } });
+      const s = await moteur.charger({ x, y, etages: { hauteurEtage: etat.reglages.hauteurEtage, hauteurCentre: etat.reglages.allege + 0.8, caler: etat.reglages.hauteurEtageAuto } });
       if (moi !== jetonScene) return;
       scene = s;
       etat.adresse = { ...etat.adresse, x, y };
@@ -222,7 +222,7 @@ export function demarrer(): void {
       if (altitude !== null && ra.detail) {
         // Clic en 3D : la hauteur exacte au-dessus du sol devient l'état de référence.
         actif.hauteurLibre = Math.round(ra.hauteurDetail * 100) / 100;
-        actif.etage = Math.max(0, Math.min(ra.etages.length - 1, Math.round((ra.hauteurDetail - etat.reglages.allege - actif.hauteur / 2) / etat.reglages.hauteurEtage)));
+        actif.etage = Math.max(0, Math.min(ra.etages.length - 1, Math.round((ra.hauteurDetail - etat.reglages.allege - actif.hauteur / 2) / ra.hauteurEtage)));
         majURL();
       }
       resultat = r;
@@ -275,6 +275,7 @@ export function demarrer(): void {
     parId('balcon-champs').hidden = !f.balcon;
     champ('r-allege').value = String(etat.reglages.allege);
     champ('r-etage-h').value = String(etat.reglages.hauteurEtage);
+    champ('r-etage-auto').checked = etat.reglages.hauteurEtageAuto;
     champ('r-trans').value = String(Math.round(etat.reglages.transmissionHiver * 100));
     parId('r-trans-texte').textContent = `${Math.round(etat.reglages.transmissionHiver * 100)} %`;
     document.querySelectorAll<HTMLInputElement>('input[name="arbres"]').forEach((r) => (r.checked = Number(r.value) === etat.reglages.arbres));
@@ -343,7 +344,15 @@ export function demarrer(): void {
   lierNombre('f-balcon-prof', (v) => (fenetreActive()!.balconProfondeur = v));
   lierNombre('f-balcon-deg', (v) => (fenetreActive()!.balconDegagement = v));
   lierNombre('r-allege', (v) => (etat.reglages.allege = v));
-  lierNombre('r-etage-h', (v) => (etat.reglages.hauteurEtage = v));
+  // Saisir une hauteur d'étage, c'est vouloir l'imposer : le calage automatique se désactive.
+  lierNombre('r-etage-h', (v) => {
+    etat.reglages.hauteurEtage = v;
+    etat.reglages.hauteurEtageAuto = false;
+  });
+  champ('r-etage-auto').addEventListener('change', () => {
+    etat.reglages.hauteurEtageAuto = champ('r-etage-auto').checked;
+    void lancerCalcul();
+  });
   champ('f-balcon').addEventListener('change', () => {
     fenetreActive()!.balcon = champ('f-balcon').checked;
     void lancerCalcul();
@@ -440,7 +449,22 @@ export function demarrer(): void {
     parId('etage-detail').textContent =
       r.etages.length === 0
         ? 'Aucun étage détecté ici'
-        : `${f.hauteurLibre !== null ? `Hauteur choisie en 3D, proche du ${nomEtage(f.etage).toLowerCase()}` : `Centre de la fenêtre à ${nombre(r.hauteurDetail, 1)} m du sol`} · immeuble estimé à R+${dernier} (${nombre(r.toit - r.sol, 1)} m)`;
+        : `${f.hauteurLibre !== null ? `Hauteur choisie en 3D, proche du ${nomEtage(f.etage).toLowerCase()}` : `Centre de la fenêtre à ${nombre(r.hauteurDetail, 1)} m du sol`} · ${
+            r.calage === 'bdtopo'
+              ? `immeuble de ${r.etages.length} niveaux d’après la BD TOPO (R+${dernier}, ${nombre(r.toit - r.sol, 1)} m), soit ${nombre(r.hauteurEtage, 2)} m par étage`
+              : `immeuble estimé à R+${dernier} (${nombre(r.toit - r.sol, 1)} m à ${nombre(r.hauteurEtage, 1)} m par étage)`
+          }`;
+    // Pourquoi le calage a joué, ou non, sur cet immeuble.
+    const h = r.toit - r.sol;
+    parId('etage-auto-aide').textContent = !etat.reglages.hauteurEtageAuto
+      ? r.niveauxConnus
+        ? `La BD TOPO indique ${r.niveauxConnus} niveaux pour cet immeuble ; cochez la case pour en déduire la hauteur d’étage.`
+        : 'La BD TOPO ne donne pas le nombre de niveaux de cet immeuble.'
+      : r.calage === 'bdtopo'
+        ? `La BD TOPO indique ${r.niveauxConnus} niveaux, rez-de-chaussée compris, pour ${nombre(r.hauteurCalage, 1)} m ${r.baseCalage === 'gouttiere' ? 'à la gouttière (BD TOPO)' : 'mesurés au LiDAR, toit compris'} : ${nombre(r.hauteurEtage, 2)} m par étage.`
+        : r.niveauxConnus
+          ? `La BD TOPO indique ${r.niveauxConnus} niveaux, ce qui ne colle pas aux ${nombre(h, 1)} m mesurés ici (${nombre(h / r.niveauxConnus, 1)} m par étage) : la hauteur par défaut est utilisée.`
+          : 'La BD TOPO ne donne pas le nombre de niveaux de cet immeuble : la hauteur par défaut est utilisée.';
     parId<HTMLButtonElement>('etage-moins').disabled = etageVoisin(-1) === null;
     parId<HTMLButtonElement>('etage-plus').disabled = etageVoisin(1) === null;
   }
@@ -468,7 +492,7 @@ export function demarrer(): void {
       explication.innerHTML =
         r.motif === 'mitoyen'
           ? `<p><strong>À cette hauteur, le mur ne donne pas sur l’extérieur.</strong></p><p>D’après le LiDAR, un bâtiment voisin ou un volume couvert s’appuie contre la façade au niveau choisi. ${r.etages.some((e) => e.valide) ? 'Choisissez un étage plus élevé avec le bouton +.' : 'Aucun étage de ce mur n’est dégagé : choisissez une autre façade.'}</p>`
-          : '<p><strong>La hauteur choisie dépasse le toit relevé par le LiDAR.</strong></p><p>Choisissez un étage plus bas, ou vérifiez la hauteur d’étage dans les réglages.</p>';
+          : `<p><strong>Il n’y a pas d’étage à cette hauteur : elle dépasse le toit relevé par le LiDAR.</strong></p><p>${r.etages.length ? `L’immeuble compte ${r.etages.length} niveaux ici (jusqu’à R+${r.etages.length - 1}). ` : ''}Choisissez un étage plus bas avec le bouton −, ou vérifiez la hauteur d’étage dans les réglages.</p>`;
       graphiques.forEach((s) => (s.hidden = true));
       actions.forEach((b) => (b.disabled = true));
       return;

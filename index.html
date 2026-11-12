@@ -146,8 +146,10 @@
               <label class="champ-nombre"><span>Hauteur</span><span class="champ-nombre__saisie"><input type="number" id="f-hauteur" min="0.3" max="4" step="0.1" inputmode="decimal" /> m</span></label>
               <label class="champ-nombre"><span>Hauteur d’allège</span><span class="champ-nombre__saisie"><input type="number" id="r-allege" min="0" max="2" step="0.1" inputmode="decimal" /> m</span></label>
               <label class="champ-nombre"><span>Profondeur d’embrasure</span><span class="champ-nombre__saisie"><input type="number" id="f-embrasure" min="0" max="1" step="0.05" inputmode="decimal" /> m</span></label>
-              <label class="champ-nombre"><span>Hauteur d’étage</span><span class="champ-nombre__saisie"><input type="number" id="r-etage-h" min="2.2" max="5" step="0.1" inputmode="decimal" /> m</span></label>
+              <label class="champ-nombre"><span>Hauteur d’étage par défaut</span><span class="champ-nombre__saisie"><input type="number" id="r-etage-h" min="2.2" max="5" step="0.1" inputmode="decimal" /> m</span></label>
             </div>
+            <label class="case"><input type="checkbox" id="r-etage-auto" /> Caler la hauteur d’étage sur le nombre de niveaux connu de l’immeuble</label>
+            <p class="aide" id="etage-auto-aide"></p>
             <label class="case"><input type="checkbox" id="f-balcon" /> Balcon ou auvent au-dessus de la fenêtre</label>
             <div class="grille-champs" id="balcon-champs" hidden>
               <label class="champ-nombre"><span>Avancée du balcon</span><span class="champ-nombre__saisie"><input type="number" id="f-balcon-prof" min="0.2" max="4" step="0.1" inputmode="decimal" /> m</span></label>

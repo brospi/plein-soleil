@@ -55,6 +55,59 @@ export interface ParametresEtages {
   hauteurEtage: number;
   /** Hauteur du centre de la fenêtre au-dessus du plancher (m). */
   hauteurCentre: number;
+  /**
+   * Nombre de niveaux du bâtiment, rez-de-chaussée compris (champ
+   * `nombre_d_etages` de la BD TOPO). S'il est plausible au regard de la
+   * hauteur mesurée, il remplace la hauteur d'étage par défaut.
+   */
+  niveauxConnus?: number | null;
+  /** Hauteur du bâtiment à la gouttière d'après la BD TOPO (m), si elle est connue. */
+  hauteurConnue?: number | null;
+  /** Dans `classerAretes` : caler chaque bâtiment sur son nombre de niveaux connu. */
+  caler?: boolean;
+}
+
+/** Bornes de plausibilité d'une hauteur d'étage déduite d'un nombre de niveaux (m). */
+export const ETAGE_MIN_PLAUSIBLE = 2.4;
+export const ETAGE_MAX_PLAUSIBLE = 4.2;
+
+export type BaseCalage = 'lidar' | 'gouttiere';
+
+export interface Calage {
+  hauteurEtage: number;
+  cale: boolean;
+  /** Hauteur de bâtiment qui a servi : toit LiDAR ou gouttière BD TOPO ; null sans calage. */
+  base: BaseCalage | null;
+  /** Hauteur de bâtiment retenue (m). */
+  hauteurBatiment: number;
+}
+
+/**
+ * Hauteur d'étage à retenir : hauteur du bâtiment divisée par son nombre de
+ * niveaux connu, si le résultat est plausible ; hauteur par défaut sinon
+ * (nombre absent, ou mal rattaché au bâtiment).
+ *
+ * Deux hauteurs de bâtiment sont possibles : celle du LiDAR, toit compris, et
+ * celle de la BD TOPO, mesurée à la gouttière. La bonne dépend de ce que le
+ * nombre de niveaux compte (combles habités ou non), ce qu'on ignore : on
+ * retient celle qui donne la hauteur d'étage la plus proche de la valeur par
+ * défaut. La hauteur BD TOPO n'est considérée que si elle est cohérente avec
+ * ce que le LiDAR mesure à cet endroit du bâtiment.
+ */
+export function hauteurEtageCalee(hauteurLidar: number, niveauxConnus: number | null | undefined, defaut: number, hauteurGouttiere?: number | null): Calage {
+  const aucun: Calage = { hauteurEtage: defaut, cale: false, base: null, hauteurBatiment: hauteurLidar };
+  if (!niveauxConnus || niveauxConnus < 1 || !(hauteurLidar > 0)) return aucun;
+  const candidats: Array<{ base: BaseCalage; hauteur: number }> = [{ base: 'lidar', hauteur: hauteurLidar }];
+  if (hauteurGouttiere && hauteurGouttiere >= 0.6 * hauteurLidar && hauteurGouttiere <= hauteurLidar + 1) {
+    candidats.push({ base: 'gouttiere', hauteur: Math.min(hauteurGouttiere, hauteurLidar) });
+  }
+  let meilleur: Calage | null = null;
+  for (const c of candidats) {
+    const h = c.hauteur / niveauxConnus;
+    if (h < ETAGE_MIN_PLAUSIBLE || h > ETAGE_MAX_PLAUSIBLE) continue;
+    if (!meilleur || Math.abs(h - defaut) < Math.abs(meilleur.hauteurEtage - defaut)) meilleur = { hauteurEtage: h, cale: true, base: c.base, hauteurBatiment: c.hauteur };
+  }
+  return meilleur ?? aucun;
 }
 
 export const ETAGES_DEFAUT: ParametresEtages = { hauteurEtage: 3, hauteurCentre: 1.7 };
@@ -241,6 +294,10 @@ export interface AnalysePoint {
   etages: EtageAnalyse[];
   /** Premier étage valide, ou −1. */
   etageMin: number;
+  /** Hauteur d'étage retenue (m), et comment elle a été obtenue. */
+  hauteurEtage: number;
+  cale: boolean;
+  calage: Calage;
 }
 
 const DECALAGES_LATERAUX = [0, -0.6, 0.6];
@@ -282,29 +339,33 @@ export function analyserPoint(relief: Relief, px: number, py: number, nx: number
   if (!(sol > -1000)) sol = valeurLisse(relief.mnt, px, py, 0);
   const etages: EtageAnalyse[] = [];
   let etageMin = -1;
-  const nb = Math.max(0, Math.floor((toit - 0.6 - sol - p.hauteurCentre) / p.hauteurEtage) + 1);
+  const calage = hauteurEtageCalee(toit - sol, p.niveauxConnus, p.hauteurEtage, p.hauteurConnue);
+  const { hauteurEtage, cale } = calage;
+  // Calé : exactement le nombre de niveaux connu. Sinon : autant d'étages qu'il en tient sous le toit.
+  const nb = cale ? p.niveauxConnus! : Math.max(0, Math.floor((toit - 0.6 - sol - p.hauteurCentre) / hauteurEtage) + 1);
   for (let k = 0; k < Math.min(nb, 60); k++) {
-    const z = sol + k * p.hauteurEtage + p.hauteurCentre;
+    const z = sol + k * hauteurEtage + p.hauteurCentre;
     const decalage = decalageDuMur(relief, px, py, nx, ny, z, true);
     if (decalage !== null && etageMin < 0) etageMin = k;
     etages.push({ etage: k, z, decalage });
   }
-  return { sol, toit, etages, etageMin };
+  return { sol, toit, etages, etageMin, hauteurEtage, cale, calage };
 }
 
 /**
  * Évalue chaque arête : « libre » si au moins un étage donne sur l'extérieur
  * quelque part le long du mur, « mitoyen » sinon.
  */
-export function classerAretes(aretes: Arete[], relief: Relief, p: ParametresEtages = ETAGES_DEFAUT): void {
+export function classerAretes(aretes: Arete[], relief: Relief, p: ParametresEtages = ETAGES_DEFAUT, batiments: Batiment[] = []): void {
   for (const a of aretes) {
     if (a.statut === 'courte') continue;
+    const params = p.caler ? { ...p, niveauxConnus: batiments[a.bat]?.etages ?? null, hauteurConnue: batiments[a.bat]?.hauteur ?? null } : p;
     const n = Math.max(1, Math.min(8, Math.round(a.longueur / 2.5)));
     let etageMin = -1;
     let nbEtages = 0;
     for (let i = 0; i < n; i++) {
       const t = (i + 0.5) / n;
-      const an = analyserPoint(relief, a.ax + (a.bx - a.ax) * t, a.ay + (a.by - a.ay) * t, a.nx, a.ny, p);
+      const an = analyserPoint(relief, a.ax + (a.bx - a.ax) * t, a.ay + (a.by - a.ay) * t, a.nx, a.ny, params);
       if (an.etages.length > nbEtages) nbEtages = an.etages.length;
       if (an.etageMin >= 0 && (etageMin < 0 || an.etageMin < etageMin)) etageMin = an.etageMin;
     }

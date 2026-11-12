@@ -16,9 +16,12 @@ interface Api {
       detail: { indicateurs: { heuresAn: number; heuresRefAn: number; cielVisible: number; energieAn: number; moyenneHiver: number; moyenneEte: number } } | null;
       etages: Array<{ valide: boolean; indicateurs: { heuresAn: number } | null }>;
       chrono: { horizon: number; simulation: number };
+      calage: 'bdtopo' | 'defaut';
+      hauteurEtage: number;
+      niveauxConnus: number | null;
     }>;
   } | null;
-  etat(): { fenetres: Array<{ etage: number }>; actif: number };
+  etat(): { fenetres: Array<{ etage: number }>; actif: number; reglages: { hauteurEtageAuto: boolean; hauteurEtage: number } };
   murs(): Array<{ distance: number; ecran: { x: number; y: number } }>;
 }
 declare global {
@@ -161,6 +164,54 @@ test('partage par lien, comparateur, exports et vue 3D', async ({ page, context 
   await expect(page.locator('#vue3d-message')).toBeHidden({ timeout: 30_000 });
   await expect(page.locator('#v3-date-texte')).not.toBeEmpty();
 
+  expect(erreurs, erreurs.join('\n')).toEqual([]);
+});
+
+test('hauteur d’étage calée sur le nombre de niveaux de la BD TOPO, et désactivable', async ({ page }) => {
+  const erreurs = surveiller(page);
+  await chercher(page, '18 rue Oberkampf 75011 Paris', /Oberkampf/i);
+  // On cherche un mur dont l'immeuble a un nombre de niveaux exploitable.
+  const boite = (await page.locator('#carte').boundingBox())!;
+  const murs = await page.evaluate(({ l, h }) => window.pleinSoleil.murs().filter((m) => m.ecran.x > 30 && m.ecran.y > 60 && m.ecran.x < l - 30 && m.ecran.y < h - 30), { l: boite.width, h: boite.height });
+  let cale = false;
+  for (const m of murs.slice(0, 8)) {
+    const avant = await page.evaluate(() => window.pleinSoleil.resultat());
+    await page.mouse.click(boite.x + m.ecran.x, boite.y + m.ecran.y);
+    await page.waitForFunction((a) => window.pleinSoleil.resultat() !== null && window.pleinSoleil.resultat() !== a, avant, { timeout: 30_000 });
+    cale = await page.evaluate(() => window.pleinSoleil.resultat()!.fenetres[0].calage === 'bdtopo');
+    if (cale) break;
+  }
+  expect(cale, 'au moins un immeuble calé sur la BD TOPO près de l’adresse').toBe(true);
+  const r = await page.evaluate(() => {
+    const f = window.pleinSoleil.resultat()!.fenetres[0];
+    return { niveaux: f.niveauxConnus, hauteurEtage: f.hauteurEtage, etages: f.etages.length };
+  });
+  console.log(`  ${r.niveaux} niveaux d'après la BD TOPO, ${r.hauteurEtage.toFixed(2)} m par étage`);
+  expect(r.etages).toBe(r.niveaux);
+  expect(r.hauteurEtage).toBeGreaterThanOrEqual(2.4);
+  expect(r.hauteurEtage).toBeLessThanOrEqual(4.2);
+  await expect(page.locator('#etage-detail')).toContainText(`${r.niveaux} niveaux d’après la BD TOPO`);
+
+  // Décocher : retour à la hauteur par défaut, et le réglage voyage dans le lien.
+  await page.locator('#repli-fenetre summary').click();
+  await expect(page.locator('#r-etage-auto')).toBeChecked();
+  await expect(page.locator('#etage-auto-aide')).toContainText('BD TOPO');
+  await page.locator('#r-etage-auto').uncheck();
+  await page.waitForFunction(() => window.pleinSoleil.resultat()!.fenetres[0].calage === 'defaut');
+  expect(await page.evaluate(() => window.pleinSoleil.resultat()!.fenetres[0].hauteurEtage)).toBe(3);
+  await expect(page.locator('#etage-detail')).toContainText('estimé');
+  await page.reload();
+  await page.waitForFunction(() => window.pleinSoleil.resultat() !== null, undefined, { timeout: 60_000 });
+  expect(await page.evaluate(() => window.pleinSoleil.etat().reglages.hauteurEtageAuto)).toBe(false);
+
+  // Recocher puis saisir une hauteur : la saisie manuelle l'emporte et décoche la case.
+  await page.locator('#repli-fenetre summary').click();
+  await page.locator('#r-etage-auto').check();
+  await page.waitForFunction(() => window.pleinSoleil.resultat()!.fenetres[0].calage === 'bdtopo');
+  await page.locator('#r-etage-h').fill('2.7');
+  await page.locator('#r-etage-h').blur();
+  await page.waitForFunction(() => window.pleinSoleil.resultat()!.fenetres[0].hauteurEtage === 2.7);
+  await expect(page.locator('#r-etage-auto')).not.toBeChecked();
   expect(erreurs, erreurs.join('\n')).toEqual([]);
 });
 

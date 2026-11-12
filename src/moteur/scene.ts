@@ -146,7 +146,7 @@ export async function chargerScene(
     for (let i = 0; i < classes.length; i++) classes[i] = dur.d[i] - solFin.d[i] > 1 ? 3 : 1;
     const relief: Relief = { dur, mnt: solFin };
     const aretes = batiProche.flatMap((b, i) => aretesDuBatiment(b, i));
-    classerAretes(aretes, relief, etages);
+    classerAretes(aretes, relief, etages, batiProche);
     const incertains = tous.filter((b) => !hauteurEstimee(b).fiable).length;
     avertissements.push(
       'Le LiDAR HD de l’IGN n’est pas publié sur cette zone. Le calcul repose sur les emprises et hauteurs de la BD TOPO (bâtiments en blocs à toit plat, sans arbres, dans un rayon de 250 m) et sur le relief du RGE ALTI : résultat indicatif.',
@@ -221,7 +221,7 @@ export async function chargerScene(
   const batiments = await pBati;
   const relief: Relief = { dur: s0.dur, mnt: mntFin };
   const aretes = batiments.flatMap((b, i) => aretesDuBatiment(b, i));
-  classerAretes(aretes, relief, etages);
+  classerAretes(aretes, relief, etages, batiments);
   return {
     mode: 'lidar',
     niveaux,
