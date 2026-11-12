@@ -7,7 +7,7 @@ Plein Soleil calcule, pour une année type et par ciel clair, les heures où le 
 - Gratuit, en français, sans compte ni serveur : tout le calcul se fait dans le navigateur.
 - Site statique, prêt pour GitHub Pages.
 
-**Démo :** _lien à renseigner après publication (voir « Déploiement »)._
+**Démo : <https://brospi.github.io/plein-soleil/>**
 
 ## Utilisation
 
@@ -98,8 +98,8 @@ Voir la section « Méthode et limites » de l'application. En bref : pas de mé
 
 Le site est statique (`dist/`) et utilise des chemins relatifs : il fonctionne sous n'importe quel sous-chemin.
 
-- **GitHub Actions** : `.github/workflows/deploiement.yml` lance lint, types, tests et construction, puis publie sur GitHub Pages à chaque poussée sur `main`. Dans le dépôt : _Settings → Pages → Source : GitHub Actions_.
-- **À la main** : `npm run build`, puis publier le contenu de `dist/`.
+- **Branche `gh-pages`** (méthode utilisée pour la démo) : `npm run publier` construit le site et pousse `dist/` sur la branche `gh-pages`. Dans le dépôt : _Settings → Pages → Source : Deploy from a branch → gh-pages_.
+- **GitHub Actions** (facultatif) : copier `deploiement/github-actions-pages.yml` dans `.github/workflows/` pour lancer lint, types, tests et construction, puis publier à chaque poussée sur `main` (_Settings → Pages → Source : GitHub Actions_). Pousser ce fichier demande un jeton avec le droit `workflow`.
 
 L'application doit être servie en HTTPS sur un vrai domaine (Web Worker, IndexedDB, presse-papiers) ; elle n'est pas prévue pour un iframe « sandboxé ».
 
