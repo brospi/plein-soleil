@@ -72,7 +72,7 @@
         <section class="carte-bloc carte-bloc--plan" aria-labelledby="t-facade">
           <div class="carte-bloc__tete">
             <h2 class="etape" id="t-facade"><span class="etape__numero">2</span> Façade et fenêtre</h2>
-            <div class="segments" role="tablist" aria-label="Type de vue">
+            <div class="segments" role="tablist" aria-label="Type de vue" id="onglets-vue">
               <button type="button" role="tab" class="segments__option" id="onglet-carte" aria-selected="true" aria-controls="carte">Carte</button>
               <button type="button" role="tab" class="segments__option" id="onglet-3d" aria-selected="false" aria-controls="vue3d">3D</button>
             </div>
@@ -93,6 +93,7 @@
                 <div class="vue3d__boutons">
                   <button type="button" class="bouton bouton--petit" id="v3-lecture" aria-pressed="false">▶ Animer la journée</button>
                   <button type="button" class="bouton bouton--petit" id="v3-texture" aria-pressed="false">Photo aérienne</button>
+                  <button type="button" class="bouton bouton--petit" id="v3-fenetre" aria-pressed="false" disabled>Vue depuis la fenêtre</button>
                   <button type="button" class="bouton bouton--petit" id="v3-recentrer">Recentrer</button>
                 </div>
               </div>

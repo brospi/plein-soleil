@@ -15,6 +15,8 @@ Plein Soleil calcule, pour une année type et par ciel clair, les heures où le 
 2. Toucher le mur où se trouve la fenêtre, sur la carte ou dans la vue 3D (hauteur exacte).
 3. Choisir l'étage : indicateurs, graphiques et comparaison par étage s'affichent aussitôt.
 
+La vue 3D propose aussi une « vue depuis la fenêtre » : on regarde dehors depuis le vitrage choisi, avec le soleil à l'heure réglée et sa course du jour, que les immeubles cachent comme dans la réalité.
+
 On peut ajouter d'autres façades du même logement (traversant, angle), enregistrer jusqu'à 4 logements dans le comparateur, partager un lien qui rouvre exactement le calcul, exporter une fiche PDF et un CSV jour par jour.
 
 ## Développement

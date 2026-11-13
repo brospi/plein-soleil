@@ -11,6 +11,7 @@ import { type Maillage } from '../coeur/maillage';
 import { ANNEE_TYPE, dateDuJour, positionSoleil, utcDepuisHeureLegale } from '../coeur/soleil';
 import { COUCHE_ORTHO_WMS, urlImage } from '../donnees/ign';
 import { dateLongue, heureDuJour, parId } from './outils';
+import { AIDE_3D, AIDE_VUE_FENETRE } from './textes';
 
 export interface PointMur {
   x: number;
@@ -33,6 +34,10 @@ interface Observation {
 }
 
 const RAD = Math.PI / 180;
+/** Distance (m) à laquelle sont dessinés le soleil et sa course : assez loin pour passer derrière tout le quartier. */
+const DISTANCE_CIEL = 3000;
+const CHAMP_ENSEMBLE = 42;
+const CHAMP_FENETRE = 75;
 
 /** Table sRGB → linéaire : les couleurs de sommets sont attendues en linéaire. */
 const LINEAIRE = new Float32Array(256);
@@ -64,8 +69,23 @@ export class Vue3D {
   private minutes = 14 * 60;
   private lecture = false;
   private mobile = window.matchMedia('(max-width: 700px)').matches || (navigator.hardwareConcurrency ?? 8) <= 4;
+  /** Soleil visible et course du jour, dessinés très loin : les bâtiments les cachent comme dans la réalité. */
+  private voute = new THREE.Group();
+  private disque = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 16), new THREE.MeshBasicMaterial({ color: 0xffd23a, toneMapped: false }));
+  private course = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0xf08c00, toneMapped: false }));
+  private reperes = new THREE.Group();
+  private etiquettes = new Map<number, THREE.Texture>();
+  /** Vue depuis la fenêtre : position de l'œil, cap (azimut grille) et site (angle au-dessus de l'horizontale), en radians. */
+  private vueFenetre = false;
+  private oeil: { position: THREE.Vector3; az: number } | null = null;
+  private cap = 0;
+  private site = 0;
   sceneCourante: InfoScene | null = null;
   surMur: (p: PointMur) => void = () => {};
+  /** Texte d'aide correspondant au mode courant. */
+  get aide(): string {
+    return this.vueFenetre ? AIDE_VUE_FENETRE : AIDE_3D;
+  }
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -85,7 +105,9 @@ export class Vue3D {
     this.soleil.shadow.bias = -0.0002;
     this.soleil.shadow.normalBias = 0.08;
     this.soleil.shadow.radius = 2.5;
-    this.scene3.add(this.soleil, this.soleil.target, this.ciel, this.maillages, this.marqueurs);
+    this.disque.scale.setScalar(DISTANCE_CIEL * Math.tan(1.1 * RAD));
+    this.voute.add(this.disque, this.course, this.reperes);
+    this.scene3.add(this.soleil, this.soleil.target, this.ciel, this.maillages, this.marqueurs, this.voute);
 
     this.commandes = new OrbitControls(this.camera, canvas);
     this.commandes.enableDamping = true;
@@ -97,6 +119,7 @@ export class Vue3D {
 
     new ResizeObserver(() => this.redimensionner()).observe(canvas.parentElement!);
     this.installerClic();
+    this.installerRegard();
     this.installerCommandes();
     this.redimensionner();
   }
@@ -108,7 +131,8 @@ export class Vue3D {
     requestAnimationFrame(() => {
       this.renduDemande = false;
       if (this.lecture) this.avancer();
-      this.commandes.update();
+      // En vue depuis la fenêtre, la caméra est pilotée directement (regard libre, position fixe).
+      if (!this.vueFenetre) this.commandes.update();
       this.rendu.render(this.scene3, this.camera);
       if (this.lecture) this.demanderRendu();
     });
@@ -187,12 +211,23 @@ export class Vue3D {
     cam.near = 10;
     cam.far = rayon * 8;
     cam.updateProjectionMatrix();
+    if (this.vueFenetre) this.basculerVueFenetre(false);
     this.recentrer(centre.az);
+    this.majCourse();
     this.majSoleil();
   }
 
   /** Place la caméra face à la façade étudiée (ou en vue d'ensemble). */
   recentrer(az: number | null = null): void {
+    if (this.vueFenetre && this.oeil) {
+      // Regard ramené dans l'axe de la fenêtre, légèrement levé.
+      this.cap = this.oeil.az * RAD;
+      this.site = 15 * RAD;
+      this.camera.fov = CHAMP_FENETRE;
+      this.camera.updateProjectionMatrix();
+      this.appliquerRegard();
+      return;
+    }
     const cible = new THREE.Vector3(0, 10, 0);
     const actif = this.marqueurs.children.find((m) => m.userData.actif);
     if (actif) cible.copy(actif.position);
@@ -206,6 +241,7 @@ export class Vue3D {
 
   definirFenetres(observations: Observation[]): void {
     for (const enfant of [...this.marqueurs.children]) this.marqueurs.remove(enfant);
+    this.oeil = null;
     if (!this.infos) return;
     for (const o of observations) {
       const a = o.az * RAD;
@@ -239,27 +275,162 @@ export class Vue3D {
       groupe.rotation.y = Math.atan2(n.x, n.z);
       groupe.userData = { actif: o.actif, az: o.az };
       this.marqueurs.add(groupe);
+      // L'œil est au centre du vitrage, 20 cm devant le mur relevé par le LiDAR.
+      if (o.actif) this.oeil = { position: new THREE.Vector3(o.x - this.infos.x - n.x * 0.3, o.z - this.infos.z0, -(o.y - this.infos.y) - n.z * 0.3), az: o.az };
+    }
+    const bouton = parId<HTMLButtonElement>('v3-fenetre');
+    bouton.disabled = this.oeil === null;
+    bouton.title = this.oeil ? '' : 'Placez d’abord une fenêtre sur une façade';
+    if (this.vueFenetre) {
+      if (this.oeil) this.recentrer();
+      else this.basculerVueFenetre(false);
     }
     this.demanderRendu();
+  }
+
+  /* ---------- Vue depuis la fenêtre ---------- */
+  basculerVueFenetre(active: boolean): void {
+    if (active && !this.oeil) return;
+    this.vueFenetre = active;
+    const bouton = parId('v3-fenetre');
+    bouton.setAttribute('aria-pressed', String(active));
+    bouton.textContent = active ? 'Vue d’ensemble' : 'Vue depuis la fenêtre';
+    parId('carte-aide').textContent = this.aide;
+    this.commandes.enabled = !active;
+    // Les repères de fenêtre gêneraient la vue : ils sont masqués le temps de regarder dehors.
+    this.marqueurs.visible = !active;
+    this.camera.near = active ? 0.1 : 1;
+    this.camera.fov = active ? CHAMP_FENETRE : CHAMP_ENSEMBLE;
+    this.camera.updateProjectionMatrix();
+    this.recentrer();
+    if (!active) this.majSoleil();
+  }
+
+  private appliquerRegard(): void {
+    if (!this.oeil) return;
+    this.site = Math.max(-60 * RAD, Math.min(88 * RAD, this.site));
+    this.camera.position.copy(this.oeil.position);
+    this.camera.rotation.order = 'YXZ';
+    // La caméra regarde vers −z (le nord) : un cap compté vers l'est est une rotation négative autour de la verticale.
+    this.camera.rotation.set(this.site, -this.cap, 0);
+    this.voute.position.copy(this.oeil.position);
+    this.demanderRendu();
+  }
+
+  /** Mode, position et regard de la caméra (diagnostic et tests). */
+  etatCamera(): { mode: 'fenetre' | 'ensemble'; x: number; y: number; z: number; cap: number; site: number; champ: number } {
+    const p = this.camera.position;
+    return { mode: this.vueFenetre ? 'fenetre' : 'ensemble', x: p.x, y: p.y, z: p.z, cap: this.cap / RAD, site: this.site / RAD, champ: this.camera.fov };
+  }
+
+  private installerRegard(): void {
+    let dernier: { x: number; y: number } | null = null;
+    this.canvas.addEventListener('pointerdown', (ev) => {
+      if (!this.vueFenetre) return;
+      dernier = { x: ev.clientX, y: ev.clientY };
+      this.canvas.setPointerCapture(ev.pointerId);
+    });
+    this.canvas.addEventListener('pointermove', (ev) => {
+      if (!this.vueFenetre || !dernier) return;
+      // Le paysage suit le doigt : glisser vers la gauche fait tourner le regard vers la droite.
+      const parPixel = (this.camera.fov * RAD) / this.canvas.clientHeight;
+      this.cap -= (ev.clientX - dernier.x) * parPixel;
+      this.site += (ev.clientY - dernier.y) * parPixel;
+      dernier = { x: ev.clientX, y: ev.clientY };
+      this.appliquerRegard();
+    });
+    const fin = (): void => {
+      dernier = null;
+    };
+    this.canvas.addEventListener('pointerup', fin);
+    this.canvas.addEventListener('pointercancel', fin);
+    this.canvas.addEventListener(
+      'wheel',
+      (ev) => {
+        if (!this.vueFenetre) return;
+        ev.preventDefault();
+        this.camera.fov = Math.max(25, Math.min(95, this.camera.fov + ev.deltaY * 0.03));
+        this.camera.updateProjectionMatrix();
+        this.demanderRendu();
+      },
+      { passive: false },
+    );
   }
 
   /* ---------- Soleil ---------- */
   definirJour(jour: number): void {
     this.jour = jour;
     parId<HTMLInputElement>('v3-date').value = String(jour);
+    this.majCourse();
     this.majSoleil();
+  }
+
+  /** Direction du soleil dans le repère de la vue, et sa hauteur apparente (degrés), à une heure légale du jour choisi. */
+  private directionSoleil(minutes: number): { dir: THREE.Vector3; hauteur: number } | null {
+    const s = this.sceneCourante;
+    if (!s) return null;
+    const { mois, jour } = dateDuJour(this.jour);
+    const p = positionSoleil(utcDepuisHeureLegale(ANNEE_TYPE, mois, jour, 0, 0) + minutes * 60_000, s.lat, s.lon);
+    const az = (p.azimut - s.convergence) * RAD;
+    const el = Math.max(p.hauteur, -8) * RAD;
+    return { dir: new THREE.Vector3(Math.sin(az) * Math.cos(el), Math.sin(el), -Math.cos(az) * Math.cos(el)), hauteur: p.hauteur };
+  }
+
+  private etiquette(heure: number): THREE.Texture {
+    let t = this.etiquettes.get(heure);
+    if (!t) {
+      const c = document.createElement('canvas');
+      c.width = 128;
+      c.height = 64;
+      const ctx = c.getContext('2d')!;
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+      ctx.beginPath();
+      ctx.roundRect(8, 10, 112, 44, 22);
+      ctx.fill();
+      ctx.fillStyle = '#1f1c16';
+      ctx.font = "600 30px 'Inter Variable', Inter, system-ui, sans-serif";
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(`${heure} h`, 64, 33);
+      t = new THREE.CanvasTexture(c);
+      t.colorSpace = THREE.SRGBColorSpace;
+      this.etiquettes.set(heure, t);
+    }
+    return t;
+  }
+
+  /** Trace la course du soleil du jour choisi, avec un repère à chaque heure légale. */
+  private majCourse(): void {
+    const points: THREE.Vector3[] = [];
+    for (const enfant of [...this.reperes.children]) this.reperes.remove(enfant);
+    for (let m = 0; m <= 1440; m += 5) {
+      const s = this.directionSoleil(m);
+      if (!s || s.hauteur <= 0) continue;
+      const p = s.dir.clone().multiplyScalar(DISTANCE_CIEL);
+      points.push(p);
+      if (m % 60 === 0) {
+        const point = new THREE.Mesh(new THREE.SphereGeometry(DISTANCE_CIEL * 0.004, 10, 8), new THREE.MeshBasicMaterial({ color: 0xf08c00, toneMapped: false }));
+        point.position.copy(p);
+        const texte = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.etiquette(m / 60), toneMapped: false }));
+        texte.scale.set(DISTANCE_CIEL * 0.085, DISTANCE_CIEL * 0.0425, 1);
+        texte.position.copy(p).add(new THREE.Vector3(0, DISTANCE_CIEL * 0.035, 0));
+        this.reperes.add(point, texte);
+      }
+    }
+    this.course.geometry.dispose();
+    this.course.geometry = new THREE.BufferGeometry().setFromPoints(points);
   }
 
   private majSoleil(): void {
     parId('v3-date-texte').textContent = dateLongue(this.jour);
     parId('v3-heure-texte').textContent = heureDuJour(this.minutes);
-    const s = this.sceneCourante;
-    if (!s) return;
-    const { mois, jour } = dateDuJour(this.jour);
-    const p = positionSoleil(utcDepuisHeureLegale(ANNEE_TYPE, mois, jour, 0, 0) + this.minutes * 60_000, s.lat, s.lon);
-    const az = (p.azimut - s.convergence) * RAD;
-    const el = Math.max(p.hauteur, -8) * RAD;
-    const dir = new THREE.Vector3(Math.sin(az) * Math.cos(el), Math.sin(el), -Math.cos(az) * Math.cos(el));
+    const courant = this.directionSoleil(this.minutes);
+    if (!courant) return;
+    const { dir } = courant;
+    const p = { hauteur: courant.hauteur };
+    this.disque.position.copy(dir).multiplyScalar(DISTANCE_CIEL);
+    this.disque.visible = p.hauteur > -0.5;
+    this.voute.position.copy(this.vueFenetre && this.oeil ? this.oeil.position : new THREE.Vector3());
     const portee = (this.infos?.rayon ?? 150) * 3.2;
     this.soleil.position.copy(dir).multiplyScalar(portee);
     this.soleil.target.position.set(0, 0, 0);
@@ -290,6 +461,7 @@ export class Vue3D {
     heure.value = String(this.minutes);
     date.addEventListener('input', () => {
       this.jour = Number(date.value);
+      this.majCourse();
       this.majSoleil();
     });
     heure.addEventListener('input', () => {
@@ -310,6 +482,7 @@ export class Vue3D {
       void this.chargerTexture(active);
     });
     parId('v3-recentrer').addEventListener('click', () => this.recentrer());
+    parId('v3-fenetre').addEventListener('click', () => this.basculerVueFenetre(!this.vueFenetre));
   }
 
   /* ---------- Photo aérienne plaquée sur les toits et le sol ---------- */
@@ -353,7 +526,7 @@ export class Vue3D {
       depart = { x: ev.clientX, y: ev.clientY, t: performance.now() };
     });
     this.canvas.addEventListener('pointerup', (ev) => {
-      if (!depart || !this.proche || !this.infos) return;
+      if (!depart || !this.proche || !this.infos || this.vueFenetre) return;
       const immobile = Math.hypot(ev.clientX - depart.x, ev.clientY - depart.y) < 6 && performance.now() - depart.t < 600;
       depart = null;
       if (!immobile) return;

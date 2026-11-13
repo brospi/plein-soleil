@@ -23,6 +23,7 @@ import { GrapheEtages } from './graphiques/etages';
 import { GrapheCourse } from './graphiques/course';
 import { annoncer, dateLongue, differer, duree, el, nombre, nomEtage, orientation, orientationAbregee, parId, pourcent } from './outils';
 import { PORTEE_FENETRE, horsZone } from './zone';
+import { AIDE_3D, AIDE_CARTE } from './textes';
 import type { Vue3D } from './vue3d';
 
 const EXEMPLES: Array<{ nom: string; libelle: string; lon: number; lat: number }> = [
@@ -56,7 +57,6 @@ export function demarrer(): void {
   const blocResultats = parId('resultats');
   const accueil = parId('accueil');
   const boutonRecharger = parId<HTMLButtonElement>('plan-recharger');
-  const AIDE_CARTE = 'Touchez un mur orange pour y placer la fenêtre. Les murs mitoyens, en pointillés gris, ne sont pas proposés. Si l’immeuble est plus loin, déplacez la carte : ses bâtiments se chargent en chemin.';
   const comparateur = new Comparateur();
   parId('methode-contenu').innerHTML = METHODE_HTML;
 
@@ -753,7 +753,7 @@ export function demarrer(): void {
     plan.classList.toggle('plan--3d', troisD);
     if (troisD) boutonRecharger.hidden = true;
     parId('carte-aide').textContent = troisD
-      ? 'Faites glisser pour tourner, pincez ou utilisez la molette pour zoomer. Touchez une façade pour y placer la fenêtre à la hauteur exacte.'
+      ? (vue3d?.aide ?? AIDE_3D)
       : AIDE_CARTE;
     if (troisD) void preparer3D(vue3d !== null && vue3d.sceneCourante !== scene).then(() => vue3d?.redimensionner());
     else carte.redimensionner();
@@ -839,6 +839,7 @@ export function demarrer(): void {
     etat: () => etat,
     resultat: () => resultat,
     scene: () => scene,
+    camera3d: () => vue3d?.etatCamera() ?? null,
     /** Déplace la carte de (dx, dy) mètres vers l'est et le nord, comme le ferait un glissement. */
     deplacerCarte: (dx: number, dy: number) => {
       const c = carte.centre();

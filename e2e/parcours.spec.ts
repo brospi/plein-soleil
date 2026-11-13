@@ -10,12 +10,15 @@ import { expect, test, type Page } from '@playwright/test';
 interface Api {
   scene(): { mode: string; avertissements: string[]; x: number; y: number } | null;
   deplacerCarte(dx: number, dy: number): void;
+  camera3d(): { mode: 'fenetre' | 'ensemble'; x: number; y: number; z: number; cap: number; site: number; champ: number } | null;
   resultat(): {
     dureeMs: number;
     fenetres: Array<{
       detail: { indicateurs: { heuresAn: number; heuresRefAn: number; cielVisible: number; energieAn: number; moyenneHiver: number; moyenneEte: number } } | null;
       etages: Array<{ valide: boolean; indicateurs: { heuresAn: number } | null }>;
       chrono: { horizon: number; simulation: number };
+      hauteurDetail: number;
+      azNormale: number;
       calage: 'bdtopo' | 'defaut';
       hauteurEtage: number;
       niveauxConnus: number | null;
@@ -164,6 +167,65 @@ test('partage par lien, comparateur, exports et vue 3D', async ({ page, context 
   await expect(page.locator('#vue3d-message')).toBeHidden({ timeout: 30_000 });
   await expect(page.locator('#v3-date-texte')).not.toBeEmpty();
 
+  expect(erreurs, erreurs.join('\n')).toEqual([]);
+});
+
+test('mode agrandi : bascule Carte / 3D, et vue depuis la fenêtre choisie', async ({ page }) => {
+  const erreurs = surveiller(page);
+  const a = ADRESSES[0];
+  await chercher(page, a.saisie, a.attendu);
+  await cliquerMur(page);
+
+  // En mode agrandi, les onglets restent visibles et cliquables dans les deux sens.
+  await page.locator('#plan-agrandir').click();
+  await expect(page.locator('.plan')).toHaveClass(/plan--plein/);
+  await page.locator('#onglet-3d').click();
+  await expect(page.locator('#vue3d-canvas')).toBeVisible();
+  await expect(page.locator('#vue3d-message')).toBeHidden({ timeout: 30_000 });
+  await expect(page.locator('.plan')).toHaveClass(/plan--plein/);
+  await page.locator('#onglet-carte').click();
+  await expect(page.locator('#carte')).toBeVisible();
+  await expect(page.locator('#vue3d')).toBeHidden();
+  await expect(page.locator('.plan')).toHaveClass(/plan--plein/);
+  await page.locator('#onglet-3d').click();
+  await expect(page.locator('#vue3d-canvas')).toBeVisible();
+
+  // Vue depuis la fenêtre : l'œil est à la hauteur du centre du vitrage et regarde dans l'axe de la façade.
+  const attendu = await page.evaluate(() => {
+    const f = window.pleinSoleil.resultat()!.fenetres[0];
+    return { hauteur: f.hauteurDetail, az: f.azNormale };
+  });
+  await expect(page.locator('#v3-fenetre')).toBeEnabled();
+  await page.locator('#v3-fenetre').click();
+  await expect(page.locator('#v3-fenetre')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#v3-fenetre')).toHaveText('Vue d’ensemble');
+  const vue = (await page.evaluate(() => window.pleinSoleil.camera3d()))!;
+  expect(vue.mode).toBe('fenetre');
+  expect(Math.abs(vue.cap - attendu.az)).toBeLessThan(0.01);
+  // Le sol de la vue 3D est l'altitude du terrain au centre de la vue : écart de quelques décimètres au plus.
+  expect(Math.abs(vue.y - attendu.hauteur)).toBeLessThan(1.5);
+  await expect(page.locator('#carte-aide')).toContainText('depuis la fenêtre');
+
+  // Glisser vers la gauche fait tourner le regard vers la droite ; l'œil ne bouge pas.
+  const boite = (await page.locator('#vue3d-canvas').boundingBox())!;
+  const cx = boite.x + boite.width / 2;
+  const cy = boite.y + boite.height / 3;
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx - 150, cy + 40, { steps: 5 });
+  await page.mouse.up();
+  const apres = (await page.evaluate(() => window.pleinSoleil.camera3d()))!;
+  expect(apres.cap).toBeGreaterThan(vue.cap + 5);
+  expect(apres.site).toBeGreaterThan(vue.site + 1);
+  expect(Math.hypot(apres.x - vue.x, apres.y - vue.y, apres.z - vue.z)).toBeLessThan(1e-6);
+  // Aucune fenêtre n'a été déplacée par ce geste.
+  expect(await page.evaluate(() => window.pleinSoleil.etat().fenetres.length)).toBe(1);
+
+  // Retour à la vue d'ensemble, puis sortie du mode agrandi.
+  await page.locator('#v3-fenetre').click();
+  expect((await page.evaluate(() => window.pleinSoleil.camera3d()))!.mode).toBe('ensemble');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.plan')).not.toHaveClass(/plan--plein/);
   expect(erreurs, erreurs.join('\n')).toEqual([]);
 });
 

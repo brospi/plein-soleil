@@ -494,6 +494,20 @@ h3 + .aide {
   overflow: visible;
   max-height: none;
 }
+/* En mode agrandi, la bascule Carte / 3D reste accessible, à côté du zoom de la carte. */
+.sans-defilement #onglets-vue {
+  position: fixed;
+  top: max(10px, env(safe-area-inset-top));
+  left: 56px;
+  z-index: 1600;
+  box-shadow: var(--ombre);
+}
+@media (max-width: 520px) {
+  .plan--plein .plan__outils {
+    flex-direction: column;
+    align-items: flex-end;
+  }
+}
 .plan__message {
   position: absolute;
   left: 10px;
