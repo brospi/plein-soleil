@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Plein Soleil — l’ensoleillement d’une fenêtre, étage par étage</title>
+    <meta
+      name="description"
+      content="Calculez les heures de soleil direct d’une fenêtre d’appartement en France, étage par étage et jour par jour, à partir du LiDAR HD de l’IGN."
+    />
+    <meta name="theme-color" content="#f7f4ee" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#14161c" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <script>
+      // Thème appliqué avant le premier rendu pour éviter tout clignotement.
+      try {
+        const t = localStorage.getItem('plein-soleil:theme');
+        if (t === 'clair' || t === 'sombre') document.documentElement.dataset.theme = t;
+      } catch {}
+    </script>
+    <script type="module" crossorigin src="./assets/index-CAnCDXFc.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-DJpGF8mG.css">
+  </head>
+  <body>
+    <a class="evitement" href="#recherche">Aller à la recherche d’adresse</a>
+    <header class="entete">
+      <div class="entete__marque">
+        <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
+          <circle cx="16" cy="16" r="7" fill="currentColor" />
+          <g stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
+            <path d="M16 2.5v4M16 25.5v4M2.5 16h4M25.5 16h4M6.5 6.5l2.8 2.8M22.7 22.7l2.8 2.8M6.5 25.5l2.8-2.8M22.7 9.3l2.8-2.8" />
+          </g>
+        </svg>
+        <div>
+          <p class="entete__titre">Plein Soleil</p>
+          <p class="entete__sous-titre">L’ensoleillement d’une fenêtre, étage par étage</p>
+        </div>
+      </div>
+      <div class="entete__actions">
+        <button type="button" class="bouton bouton--discret" id="comparateur-bouton" aria-controls="comparateur">
+          Comparateur <span class="pastille" id="comparateur-nombre">0</span>
+        </button>
+        <button type="button" class="bouton bouton--icone" id="theme-bouton" aria-label="Changer de thème" title="Changer de thème">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9c0-.5 0-.9-.1-1.4A5.5 5.5 0 0 1 13.400 3.100 9 9 0 0 0 12 3z" fill="currentColor" /></svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="page">
+      <div class="colonne colonne--lieu">
+        <section class="carte-bloc" aria-labelledby="t-adresse">
+          <h2 class="etape" id="t-adresse"><span class="etape__numero">1</span> Adresse</h2>
+          <div class="recherche" role="combobox" aria-haspopup="listbox" aria-owns="suggestions" aria-expanded="false" id="recherche-boite">
+            <svg class="recherche__icone" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2" />
+              <path d="M16 16l4.500 4.500" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+            </svg>
+            <input
+              id="recherche"
+              type="search"
+              inputmode="search"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="12 rue de la Roquette, Paris"
+              aria-label="Adresse du logement"
+              aria-autocomplete="list"
+              aria-controls="suggestions"
+            />
+            <ul class="suggestions" id="suggestions" role="listbox" hidden></ul>
+          </div>
+          <p class="aide" id="recherche-etat" aria-live="polite"></p>
+        </section>
+
+        <section class="carte-bloc carte-bloc--plan" aria-labelledby="t-facade">
+          <div class="carte-bloc__tete">
+            <h2 class="etape" id="t-facade"><span class="etape__numero">2</span> Façade et fenêtre</h2>
+            <div class="segments" role="tablist" aria-label="Type de vue" id="onglets-vue">
+              <button type="button" role="tab" class="segments__option" id="onglet-carte" aria-selected="true" aria-controls="carte">Carte</button>
+              <button type="button" role="tab" class="segments__option" id="onglet-3d" aria-selected="false" aria-controls="vue3d">3D</button>
+            </div>
+          </div>
+          <div class="plan">
+            <div id="carte" class="plan__vue" role="tabpanel" aria-labelledby="onglet-carte"></div>
+            <div id="vue3d" class="plan__vue" role="tabpanel" aria-labelledby="onglet-3d" hidden>
+              <canvas id="vue3d-canvas" aria-label="Vue 3D du quartier avec les ombres portées"></canvas>
+              <div class="vue3d__commandes" id="vue3d-commandes">
+                <label class="curseur">
+                  <span>Date <output id="v3-date-texte"></output></span>
+                  <input type="range" id="v3-date" min="0" max="364" step="1" aria-label="Date de la vue 3D" />
+                </label>
+                <label class="curseur">
+                  <span>Heure <output id="v3-heure-texte"></output></span>
+                  <input type="range" id="v3-heure" min="240" max="1320" step="5" aria-label="Heure de la vue 3D" />
+                </label>
+                <div class="vue3d__boutons">
+                  <button type="button" class="bouton bouton--petit" id="v3-lecture" aria-pressed="false">▶ Animer la journée</button>
+                  <button type="button" class="bouton bouton--petit" id="v3-texture" aria-pressed="false">Photo aérienne</button>
+                  <button type="button" class="bouton bouton--petit" id="v3-fenetre" aria-pressed="false" disabled>Vue depuis la fenêtre</button>
+                  <button type="button" class="bouton bouton--petit" id="v3-recentrer">Recentrer</button>
+                </div>
+              </div>
+              <p class="plan__message" id="vue3d-message" hidden></p>
+            </div>
+            <div class="plan__voile" id="plan-voile">
+              <p>Saisissez une adresse pour afficher les bâtiments.</p>
+            </div>
+            <button type="button" class="bouton bouton--accent bouton--petit plan__recharger" id="plan-recharger" hidden>Charger les bâtiments de cette zone</button>
+            <div class="plan__outils">
+              <button type="button" class="bouton bouton--petit" id="fond-bouton" aria-pressed="false">Photo aérienne</button>
+              <button type="button" class="bouton bouton--petit" id="plan-agrandir" aria-pressed="false">Agrandir</button>
+            </div>
+          </div>
+          <p class="aide" id="carte-aide">Touchez un mur coloré pour y placer la fenêtre. Les murs mitoyens, en gris, ne sont pas proposés.</p>
+          <p class="etat-chargement" id="etat-chargement" role="status" aria-live="polite" hidden></p>
+          <div id="avertissements"></div>
+        </section>
+
+        <section class="carte-bloc" aria-labelledby="t-fenetre" id="bloc-fenetre" hidden>
+          <h2 class="etape" id="t-fenetre"><span class="etape__numero">3</span> Étage et réglages</h2>
+          <div class="fenetres" id="fenetres-liste" role="tablist" aria-label="Fenêtres du logement"></div>
+
+          <div class="etage">
+            <button type="button" class="bouton bouton--rond" id="etage-moins" aria-label="Étage inférieur">−</button>
+            <div class="etage__valeur">
+              <p class="etage__libelle" id="etage-libelle" aria-live="polite">—</p>
+              <p class="etage__detail" id="etage-detail"></p>
+            </div>
+            <button type="button" class="bouton bouton--rond" id="etage-plus" aria-label="Étage supérieur">+</button>
+          </div>
+
+          <fieldset class="champ">
+            <legend>Arbres</legend>
+            <div class="segments segments--large" role="radiogroup" aria-label="Prise en compte des arbres">
+              <label class="segments__option"><input type="radio" name="arbres" value="0" /> Ignorés</label>
+              <label class="segments__option"><input type="radio" name="arbres" value="1" checked /> Feuillus</label>
+              <label class="segments__option"><input type="radio" name="arbres" value="2" /> Persistants</label>
+            </div>
+            <p class="aide" id="arbres-aide"></p>
+            <label class="curseur" id="trans-ligne">
+              <span>Lumière traversant les branches nues, de novembre à mars <output id="r-trans-texte"></output></span>
+              <input type="range" id="r-trans" min="0" max="100" step="5" />
+            </label>
+          </fieldset>
+
+          <details class="repli" id="repli-fenetre">
+            <summary>Dimensions de la fenêtre et balcon</summary>
+            <div class="grille-champs">
+              <label class="champ-nombre"><span>Largeur</span><span class="champ-nombre__saisie"><input type="number" id="f-largeur" min="0.3" max="8" step="0.1" inputmode="decimal" /> m</span></label>
+              <label class="champ-nombre"><span>Hauteur</span><span class="champ-nombre__saisie"><input type="number" id="f-hauteur" min="0.3" max="4" step="0.1" inputmode="decimal" /> m</span></label>
+              <label class="champ-nombre"><span>Hauteur d’allège</span><span class="champ-nombre__saisie"><input type="number" id="r-allege" min="0" max="2" step="0.1" inputmode="decimal" /> m</span></label>
+              <label class="champ-nombre"><span>Profondeur d’embrasure</span><span class="champ-nombre__saisie"><input type="number" id="f-embrasure" min="0" max="1" step="0.05" inputmode="decimal" /> m</span></label>
+              <label class="champ-nombre"><span>Hauteur d’étage par défaut</span><span class="champ-nombre__saisie"><input type="number" id="r-etage-h" min="2.2" max="5" step="0.1" inputmode="decimal" /> m</span></label>
+            </div>
+            <label class="case"><input type="checkbox" id="r-etage-auto" /> Caler la hauteur d’étage sur le nombre de niveaux connu de l’immeuble</label>
+            <p class="aide" id="etage-auto-aide"></p>
+            <label class="case"><input type="checkbox" id="f-balcon" /> Balcon ou auvent au-dessus de la fenêtre</label>
+            <div class="grille-champs" id="balcon-champs" hidden>
+              <label class="champ-nombre"><span>Avancée du balcon</span><span class="champ-nombre__saisie"><input type="number" id="f-balcon-prof" min="0.2" max="4" step="0.1" inputmode="decimal" /> m</span></label>
+              <label class="champ-nombre"><span>Au-dessus du vitrage de</span><span class="champ-nombre__saisie"><input type="number" id="f-balcon-deg" min="0" max="3" step="0.1" inputmode="decimal" /> m</span></label>
+            </div>
+            <p class="aide">L’allège est la hauteur entre le plancher et le bas du vitrage. L’embrasure est le retrait du vitrage par rapport au nu de la façade.</p>
+          </details>
+        </section>
+      </div>
+
+      <div class="colonne colonne--resultats">
+        <section class="accueil" id="accueil">
+          <h1>Combien de soleil entre vraiment par cette fenêtre ?</h1>
+          <p>
+            Plein Soleil calcule, pour une année type et par ciel clair, les heures où le soleil atteint directement une fenêtre : immeubles voisins, relief et arbres
+            compris, grâce au relevé LiDAR HD de l’IGN à 50 cm près.
+          </p>
+          <ol class="accueil__etapes">
+            <li><strong>Cherchez l’adresse</strong> du logement.</li>
+            <li><strong>Touchez le mur</strong> où se trouve la fenêtre, sur la carte ou en 3D.</li>
+            <li><strong>Choisissez l’étage</strong> : les résultats s’affichent aussitôt, du rez-de-chaussée au dernier étage.</li>
+          </ol>
+          <p class="accueil__exemples">Essayer : <span id="exemples"></span></p>
+        </section>
+
+        <div id="resultats" hidden>
+          <section class="carte-bloc resume" aria-labelledby="t-resume">
+            <div class="resume__tete">
+              <div>
+                <h2 id="t-resume" class="resume__titre">—</h2>
+                <p class="resume__sous-titre" id="resume-sous-titre"></p>
+              </div>
+              <div class="resume__actions">
+                <button type="button" class="bouton bouton--accent" id="b-enregistrer">Ajouter au comparateur</button>
+                <button type="button" class="bouton" id="b-partager">Copier le lien</button>
+                <button type="button" class="bouton" id="b-pdf">Fiche PDF</button>
+                <button type="button" class="bouton" id="b-csv">CSV</button>
+              </div>
+            </div>
+            <div class="indicateurs" id="indicateurs"></div>
+            <div class="explication" id="explication" hidden></div>
+          </section>
+
+          <section class="carte-bloc" aria-labelledby="t-annee">
+            <h3 id="t-annee">Heures de soleil, jour par jour</h3>
+            <p class="aide">Durée quotidienne pendant laquelle le soleil atteint le vitrage, comparée à la même fenêtre sur une façade dégagée.</p>
+            <div id="g-annee"></div>
+          </section>
+
+          <section class="carte-bloc" aria-labelledby="t-calendrier">
+            <h3 id="t-calendrier">Calendrier solaire</h3>
+            <p class="aide">Chaque colonne est un jour, chaque ligne une heure légale. Touchez le calendrier pour détailler une journée.</p>
+            <div id="g-calendrier"></div>
+          </section>
+
+          <section class="carte-bloc" aria-labelledby="t-journee">
+            <div class="carte-bloc__tete">
+              <h3 id="t-journee">Une journée en détail</h3>
+              <div class="raccourcis" id="jour-raccourcis"></div>
+            </div>
+            <label class="curseur">
+              <span>Date <output id="jour-texte"></output></span>
+              <input type="range" id="jour-curseur" min="0" max="364" step="1" aria-label="Jour à détailler" />
+            </label>
+            <div id="g-journee"></div>
+            <p class="creneaux" id="jour-creneaux"></p>
+          </section>
+
+          <section class="carte-bloc" aria-labelledby="t-etages">
+            <h3 id="t-etages">Comparaison par étage</h3>
+            <p class="aide">Heures de soleil par an à chaque étage, pour la même position sur la façade. Touchez une barre pour choisir l’étage.</p>
+            <div id="g-etages"></div>
+          </section>
+
+          <section class="carte-bloc" aria-labelledby="t-course">
+            <h3 id="t-course">Course du soleil et masque d’horizon</h3>
+            <p class="aide">Ce que la fenêtre voit : les obstacles découpent le ciel, le soleil n’entre que lorsqu’il passe au-dessus.</p>
+            <div id="g-course"></div>
+          </section>
+
+          <section class="carte-bloc" aria-labelledby="t-facades" id="bloc-facades" hidden>
+            <h3 id="t-facades">Façades du logement</h3>
+            <p class="aide">Logement traversant ou d’angle : chaque fenêtre, et le cumul (au moins une fenêtre au soleil).</p>
+            <div class="tableau-defilant" id="facades-tableau"></div>
+          </section>
+        </div>
+
+        <section class="carte-bloc" id="comparateur" aria-labelledby="t-comparateur" hidden>
+          <div class="carte-bloc__tete">
+            <h2 id="t-comparateur" class="titre-section">Comparateur</h2>
+            <p class="aide">Jusqu’à 4 logements, enregistrés dans ce navigateur.</p>
+          </div>
+          <div class="comparateur" id="comparateur-liste"></div>
+        </section>
+
+        <section class="carte-bloc methode" id="methode" aria-labelledby="t-methode">
+          <h2 id="t-methode" class="titre-section">Méthode et limites</h2>
+          <div id="methode-contenu"></div>
+        </section>
+      </div>
+    </main>
+
+    <footer class="pied">
+      <p>
+        Relief, bâtiments, adresses et fonds de carte : <a href="https://geoservices.ign.fr/" target="_blank" rel="noopener">© IGN — Géoplateforme</a> (LiDAR HD, BD TOPO®, Plan IGN, BD ORTHO®), licence
+        Ouverte Etalab 2.0. Recherche d’adresse de secours : <a href="https://photon.komoot.io/" target="_blank" rel="noopener">Photon</a>, données
+        <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© les contributeurs d’OpenStreetMap</a>.
+      </p>
+      <p>Plein Soleil est un outil gratuit, sans compte ni mouchard : tout le calcul se fait dans votre navigateur. Résultats indicatifs, sans valeur contractuelle.</p>
+    </footer>
+    <div class="annonce" id="annonce" role="status" aria-live="polite"></div>
+  </body>
+</html>
