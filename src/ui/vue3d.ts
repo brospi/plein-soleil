@@ -77,6 +77,7 @@ export class Vue3D {
   private etiquettes = new Map<number, THREE.Texture>();
   /** Vue depuis la fenêtre : position de l'œil, cap (azimut grille) et site (angle au-dessus de l'horizontale), en radians. */
   private vueFenetre = false;
+  private gesteDeplacer = true;
   private oeil: { position: THREE.Vector3; az: number } | null = null;
   private cap = 0;
   private site = 0;
@@ -111,17 +112,63 @@ export class Vue3D {
 
     this.commandes = new OrbitControls(this.camera, canvas);
     this.commandes.enableDamping = true;
-    this.commandes.dampingFactor = 0.12;
+    this.commandes.dampingFactor = 0.2;
     this.commandes.maxPolarAngle = 88 * RAD;
     this.commandes.minDistance = 6;
     this.commandes.maxDistance = 900;
-    this.commandes.addEventListener('change', () => this.demanderRendu());
+    // Glisser déplace la vue au sol, comme sur la carte (et non dans le plan de l'écran).
+    this.commandes.screenSpacePanning = false;
+    this.commandes.keyPanSpeed = 18;
+    this.commandes.listenToKeyEvents(canvas);
+    this.appliquerGeste();
+    this.commandes.addEventListener('change', () => {
+      this.retenirCible();
+      this.demanderRendu();
+    });
 
     new ResizeObserver(() => this.redimensionner()).observe(canvas.parentElement!);
     this.installerClic();
     this.installerRegard();
     this.installerCommandes();
     this.redimensionner();
+  }
+
+  /* ---------- Gestes : déplacer ou tourner ---------- */
+  /**
+   * Glisser déplace la vue (par défaut, comme sur la carte) ou la fait tourner.
+   * L'autre geste reste disponible au clic droit, avec Ctrl ou Maj, ou à deux doigts.
+   */
+  private appliquerGeste(): void {
+    const d = this.gesteDeplacer;
+    this.commandes.mouseButtons = { LEFT: d ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: d ? THREE.MOUSE.ROTATE : THREE.MOUSE.PAN };
+    this.commandes.touches = { ONE: d ? THREE.TOUCH.PAN : THREE.TOUCH.ROTATE, TWO: d ? THREE.TOUCH.DOLLY_ROTATE : THREE.TOUCH.DOLLY_PAN };
+    const bouton = document.getElementById('v3-geste');
+    if (bouton) bouton.textContent = d ? 'Glisser : déplacer' : 'Glisser : tourner';
+  }
+
+  private inertie = true;
+
+  /** Coupe l'élan d'un glissement en cours : sans amortissement, la mise à jour remet les vitesses à zéro. */
+  private arreterInertie(): void {
+    this.commandes.enableDamping = false;
+    this.commandes.update();
+    this.commandes.enableDamping = this.inertie;
+  }
+
+  /** Active ou coupe l'élan après un glissement (coupé dans les tests, où le rendu logiciel est lent). */
+  definirInertie(active: boolean): void {
+    this.inertie = active;
+    this.arreterInertie();
+  }
+
+  /** Empêche la vue de quitter le quartier maillé : on ramène ensemble le point visé et la caméra. */
+  private retenirCible(): void {
+    const limite = (this.infos?.rayon ?? 150) + 40;
+    const c = this.commandes.target;
+    const corrige = new THREE.Vector3(Math.max(-limite, Math.min(limite, c.x)), Math.max(0, Math.min(90, c.y)), Math.max(-limite, Math.min(limite, c.z)));
+    if (corrige.distanceToSquared(c) < 1e-8) return;
+    this.camera.position.add(corrige.clone().sub(c));
+    c.copy(corrige);
   }
 
   /* ---------- Rendu à la demande ---------- */
@@ -235,7 +282,7 @@ export class Vue3D {
     const d = this.mobile ? 95 : 110;
     this.camera.position.set(cible.x + Math.sin(a) * d, cible.y + d * 0.62, cible.z - Math.cos(a) * d);
     this.commandes.target.copy(cible);
-    this.commandes.update();
+    this.arreterInertie();
     this.demanderRendu();
   }
 
@@ -297,6 +344,7 @@ export class Vue3D {
     bouton.textContent = active ? 'Vue d’ensemble' : 'Vue depuis la fenêtre';
     parId('carte-aide').textContent = this.aide;
     this.commandes.enabled = !active;
+    parId('v3-geste').hidden = active;
     // Les repères de fenêtre gêneraient la vue : ils sont masqués le temps de regarder dehors.
     this.marqueurs.visible = !active;
     this.camera.near = active ? 0.1 : 1;
@@ -318,9 +366,20 @@ export class Vue3D {
   }
 
   /** Mode, position et regard de la caméra (diagnostic et tests). */
-  etatCamera(): { mode: 'fenetre' | 'ensemble'; x: number; y: number; z: number; cap: number; site: number; champ: number } {
+  etatCamera(): { mode: 'fenetre' | 'ensemble'; x: number; y: number; z: number; cap: number; site: number; champ: number; cible: { x: number; y: number; z: number }; geste: 'deplacer' | 'tourner' } {
     const p = this.camera.position;
-    return { mode: this.vueFenetre ? 'fenetre' : 'ensemble', x: p.x, y: p.y, z: p.z, cap: this.cap / RAD, site: this.site / RAD, champ: this.camera.fov };
+    const c = this.commandes.target;
+    return {
+      mode: this.vueFenetre ? 'fenetre' : 'ensemble',
+      x: p.x,
+      y: p.y,
+      z: p.z,
+      cap: this.cap / RAD,
+      site: this.site / RAD,
+      champ: this.camera.fov,
+      cible: { x: c.x, y: c.y, z: c.z },
+      geste: this.gesteDeplacer ? 'deplacer' : 'tourner',
+    };
   }
 
   private installerRegard(): void {
@@ -483,6 +542,11 @@ export class Vue3D {
     });
     parId('v3-recentrer').addEventListener('click', () => this.recentrer());
     parId('v3-fenetre').addEventListener('click', () => this.basculerVueFenetre(!this.vueFenetre));
+    parId('v3-geste').addEventListener('click', () => {
+      this.gesteDeplacer = !this.gesteDeplacer;
+      this.arreterInertie();
+      this.appliquerGeste();
+    });
   }
 
   /* ---------- Photo aérienne plaquée sur les toits et le sol ---------- */

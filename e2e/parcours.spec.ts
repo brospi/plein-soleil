@@ -10,7 +10,8 @@ import { expect, test, type Page } from '@playwright/test';
 interface Api {
   scene(): { mode: string; avertissements: string[]; x: number; y: number } | null;
   deplacerCarte(dx: number, dy: number): void;
-  camera3d(): { mode: 'fenetre' | 'ensemble'; x: number; y: number; z: number; cap: number; site: number; champ: number } | null;
+  inertie3d(active: boolean): void;
+  camera3d(): { mode: 'fenetre' | 'ensemble'; x: number; y: number; z: number; cap: number; site: number; champ: number; cible: { x: number; y: number; z: number }; geste: 'deplacer' | 'tourner' } | null;
   resultat(): {
     dureeMs: number;
     fenetres: Array<{
@@ -189,6 +190,47 @@ test('mode agrandi : bascule Carte / 3D, et vue depuis la fenêtre choisie', asy
   await expect(page.locator('.plan')).toHaveClass(/plan--plein/);
   await page.locator('#onglet-3d').click();
   await expect(page.locator('#vue3d-canvas')).toBeVisible();
+
+  // Vue d'ensemble : glisser déplace la vue au sol, comme sur la carte, sans la faire tourner.
+  const toile = (await page.locator('#vue3d-canvas').boundingBox())!;
+  const mx = toile.x + toile.width / 2;
+  const my = toile.y + toile.height / 3;
+  const glisser = async (dx: number, dy: number): Promise<void> => {
+    await page.mouse.move(mx, my);
+    await page.mouse.down();
+    await page.mouse.move(mx + dx, my + dy, { steps: 3 });
+    await page.mouse.up();
+  };
+  const ecart = (c: { x: number; y: number; z: number; cible: { x: number; y: number; z: number } }) => ({ x: c.x - c.cible.x, y: c.y - c.cible.y, z: c.z - c.cible.z });
+  // Sans carte graphique, le rendu des tests est lent : on coupe l'élan des glissements pour ne pas l'attendre.
+  await page.evaluate(() => window.pleinSoleil.inertie3d(false));
+  const c0 = (await page.evaluate(() => window.pleinSoleil.camera3d()))!;
+  expect(c0.geste).toBe('deplacer');
+  await glisser(-140, 30);
+  const c1 = (await page.evaluate(() => window.pleinSoleil.camera3d()))!;
+  expect(Math.hypot(c1.cible.x - c0.cible.x, c1.cible.z - c0.cible.z)).toBeGreaterThan(5);
+  expect(Math.abs(c1.cible.y - c0.cible.y)).toBeLessThan(1e-6); // déplacement au sol
+  // La caméra suit le point visé : même distance, même angle.
+  expect(Math.hypot(ecart(c1).x - ecart(c0).x, ecart(c1).y - ecart(c0).y, ecart(c1).z - ecart(c0).z)).toBeLessThan(0.01);
+  // Ce glissement n'a pas été pris pour un clic sur une façade.
+  expect(await page.evaluate(() => window.pleinSoleil.etat().fenetres.length)).toBe(1);
+  // Bouton « Glisser » : il coupe l'élan en cours, puis le même geste fait tourner la vue autour du point visé.
+  await page.locator('#v3-geste').click();
+  await expect(page.locator('#v3-geste')).toHaveText('Glisser : tourner');
+  const c1b = (await page.evaluate(() => window.pleinSoleil.camera3d()))!;
+  expect(c1b.geste).toBe('tourner');
+  await glisser(-140, 0);
+  const c2 = (await page.evaluate(() => window.pleinSoleil.camera3d()))!;
+  expect(Math.hypot(c2.cible.x - c1b.cible.x, c2.cible.z - c1b.cible.z)).toBeLessThan(1e-3);
+  expect(Math.hypot(c2.x - c1b.x, c2.z - c1b.z)).toBeGreaterThan(5);
+  // On ne peut pas sortir du quartier maillé, même en insistant.
+  await page.locator('#v3-geste').click();
+  for (let i = 0; i < 4; i++) await glisser(-500, 0);
+  const c3 = (await page.evaluate(() => window.pleinSoleil.camera3d()))!;
+  expect(Math.max(Math.abs(c3.cible.x), Math.abs(c3.cible.z))).toBeLessThanOrEqual(191);
+  await page.locator('#v3-recentrer').click();
+  const c4 = (await page.evaluate(() => window.pleinSoleil.camera3d()))!;
+  expect(Math.hypot(c4.cible.x, c4.cible.z)).toBeLessThan(Math.hypot(c3.cible.x, c3.cible.z));
 
   // Vue depuis la fenêtre : l'œil est à la hauteur du centre du vitrage et regarde dans l'axe de la façade.
   const attendu = await page.evaluate(() => {

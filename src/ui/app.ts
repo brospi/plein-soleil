@@ -840,6 +840,7 @@ export function demarrer(): void {
     resultat: () => resultat,
     scene: () => scene,
     camera3d: () => vue3d?.etatCamera() ?? null,
+    inertie3d: (active: boolean) => vue3d?.definirInertie(active),
     /** Déplace la carte de (dx, dy) mètres vers l'est et le nord, comme le ferait un glissement. */
     deplacerCarte: (dx: number, dy: number) => {
       const c = carte.centre();

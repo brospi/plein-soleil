@@ -80,7 +80,7 @@
           <div class="plan">
             <div id="carte" class="plan__vue" role="tabpanel" aria-labelledby="onglet-carte"></div>
             <div id="vue3d" class="plan__vue" role="tabpanel" aria-labelledby="onglet-3d" hidden>
-              <canvas id="vue3d-canvas" aria-label="Vue 3D du quartier avec les ombres portées"></canvas>
+              <canvas id="vue3d-canvas" tabindex="0" aria-label="Vue 3D du quartier avec les ombres portées. Flèches du clavier pour se déplacer."></canvas>
               <div class="vue3d__commandes" id="vue3d-commandes">
                 <label class="curseur">
                   <span>Date <output id="v3-date-texte"></output></span>
@@ -94,6 +94,7 @@
                   <button type="button" class="bouton bouton--petit" id="v3-lecture" aria-pressed="false">▶ Animer la journée</button>
                   <button type="button" class="bouton bouton--petit" id="v3-texture" aria-pressed="false">Photo aérienne</button>
                   <button type="button" class="bouton bouton--petit" id="v3-fenetre" aria-pressed="false" disabled>Vue depuis la fenêtre</button>
+                  <button type="button" class="bouton bouton--petit" id="v3-geste" title="Choisir ce que fait un glissement : déplacer la vue ou la faire tourner">Glisser : déplacer</button>
                   <button type="button" class="bouton bouton--petit" id="v3-recentrer">Recentrer</button>
                 </div>
               </div>
