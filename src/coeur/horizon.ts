@@ -17,7 +17,10 @@ const COURBURE = (1 - 0.13) / (2 * 6_371_000);
 
 export interface Niveau {
   dur: Raster;
+  /** Sommet de toute la végétation. */
   arbres: Raster | null;
+  /** Sommet des seuls arbres à feuillage persistant, quand un inventaire les identifie. */
+  persistants?: Raster | null;
 }
 
 export interface Faisceau {
@@ -32,6 +35,9 @@ export interface Faisceau {
   dur: Float32Array;
   offArb: Int32Array;
   arb: Float32Array;
+  /** Enveloppes des arbres persistants (vides sans inventaire). */
+  offPers: Int32Array;
+  pers: Float32Array;
 }
 
 export interface OptionsFaisceau {
@@ -81,6 +87,8 @@ function parcourir(
   env: Enveloppe,
   envArb: Enveloppe | null,
   arbres: Raster | null,
+  envPers: Enveloppe | null = null,
+  persistants: Raster | null = null,
 ): number {
   const inv = 1 / r.pas;
   const gx = (ox + dx * t0 - r.x0) * inv;
@@ -100,6 +108,7 @@ function parcourir(
   let premiere = sauterPremiere;
   const d = r.d;
   const da = arbres ? arbres.d : null;
+  const dp = persistants ? persistants.d : null;
   for (;;) {
     if (!premiere && t > 1e-3) {
       const i = cy * L + cx;
@@ -108,6 +117,10 @@ function parcourir(
       if (da && envArb) {
         const a = da[i];
         if (a > -1000) envArb.ajouter(t, a - chute);
+      }
+      if (dp && envPers) {
+        const a = dp[i];
+        if (a > -1000) envPers.ajouter(t, a - chute);
       }
     }
     premiere = false;
@@ -149,27 +162,33 @@ export function calculerFaisceau(
   }
   const offDur = new Int32Array(nk + 1);
   const offArb = new Int32Array(nk + 1);
+  const offPers = new Int32Array(nk + 1);
   const ptsDur: number[] = [];
   const ptsArb: number[] = [];
+  const ptsPers: number[] = [];
   const env = new Enveloppe();
   const envArb = new Enveloppe();
+  const envPers = new Enveloppe();
   for (let j = 0; j < nk; j++) {
     const az = ((k0 + j) % nAz) * pasAz * RAD;
     const dx = Math.sin(az);
     const dy = Math.cos(az);
     env.vider();
     envArb.vider();
+    envPers.vider();
     let t = 0;
     for (let n = 0; n < niveaux.length && t < distanceMax; n++) {
       const niv = niveaux[n];
-      t = parcourir(niv.dur, ox, oy, dx, dy, t, distanceMax, n === 0, env, envArb, niv.arbres);
+      t = parcourir(niv.dur, ox, oy, dx, dy, t, distanceMax, n === 0, env, envArb, niv.arbres, envPers, niv.persistants ?? null);
     }
     for (let i = 0; i < env.n; i++) ptsDur.push(env.d[i], env.h[i]);
     for (let i = 0; i < envArb.n; i++) ptsArb.push(envArb.d[i], envArb.h[i]);
+    for (let i = 0; i < envPers.n; i++) ptsPers.push(envPers.d[i], envPers.h[i]);
     offDur[j + 1] = ptsDur.length;
     offArb[j + 1] = ptsArb.length;
+    offPers[j + 1] = ptsPers.length;
   }
-  return { pasAz, nAz, k0, nk, offDur, dur: Float32Array.from(ptsDur), offArb, arb: Float32Array.from(ptsArb) };
+  return { pasAz, nAz, k0, nk, offDur, dur: Float32Array.from(ptsDur), offArb, arb: Float32Array.from(ptsArb), offPers, pers: Float32Array.from(ptsPers) };
 }
 
 /** Tangente de l'angle d'horizon maximal d'une enveloppe vue depuis l'altitude z. */
@@ -186,10 +205,11 @@ function tangenteMax(pts: Float32Array, debut: number, fin: number, z: number): 
  * Remplit, pour une altitude d'observation z, la tangente de l'angle
  * d'horizon de chaque azimut calculé (bâti dans `tanDur`, arbres dans `tanArb`).
  */
-export function horizonPourAltitude(f: Faisceau, z: number, tanDur: Float32Array, tanArb: Float32Array): void {
+export function horizonPourAltitude(f: Faisceau, z: number, tanDur: Float32Array, tanArb: Float32Array, tanPers?: Float32Array): void {
   for (let j = 0; j < f.nk; j++) {
     tanDur[j] = tangenteMax(f.dur, f.offDur[j], f.offDur[j + 1], z);
     tanArb[j] = tangenteMax(f.arb, f.offArb[j], f.offArb[j + 1], z);
+    if (tanPers) tanPers[j] = tangenteMax(f.pers, f.offPers[j], f.offPers[j + 1], z);
   }
 }
 

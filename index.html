@@ -139,6 +139,10 @@
               <span>Lumière traversant les branches nues, de novembre à mars <output id="r-trans-texte"></output></span>
               <input type="range" id="r-trans" min="0" max="100" step="5" />
             </label>
+            <div id="inventaire-ligne" hidden>
+              <label class="case"><input type="checkbox" id="r-inventaire" /> <span id="inventaire-libelle">Utiliser l’inventaire des arbres de la ville</span></label>
+              <p class="aide" id="inventaire-aide"></p>
+            </div>
           </fieldset>
 
           <details class="repli" id="repli-fenetre">
@@ -257,7 +261,8 @@
     <footer class="pied">
       <p>
         Relief, bâtiments, adresses et fonds de carte : <a href="https://geoservices.ign.fr/" target="_blank" rel="noopener">© IGN — Géoplateforme</a> (LiDAR HD, BD TOPO®, Plan IGN, BD ORTHO®), licence
-        Ouverte Etalab 2.0. Recherche d’adresse de secours : <a href="https://photon.komoot.io/" target="_blank" rel="noopener">Photon</a>, données
+        Ouverte Etalab 2.0. Inventaires d’arbres : <a href="https://opendata.paris.fr/explore/dataset/les-arbres/" target="_blank" rel="noopener">Ville de Paris</a> (ODbL) et
+        <a href="https://data.grandlyon.com/" target="_blank" rel="noopener">Métropole de Lyon</a> (data.grandlyon.com). Recherche d’adresse de secours : <a href="https://photon.komoot.io/" target="_blank" rel="noopener">Photon</a>, données
         <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© les contributeurs d’OpenStreetMap</a>.
       </p>
       <p>Plein Soleil est un outil gratuit, sans compte ni mouchard : tout le calcul se fait dans votre navigateur. Résultats indicatifs, sans valeur contractuelle.</p>

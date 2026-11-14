@@ -743,6 +743,7 @@ h3 + .aide {
   gap: 12px;
 }
 .curseur output {
+  white-space: nowrap;
   color: var(--texte);
   font-weight: 650;
   font-variant-numeric: tabular-nums;

@@ -16,6 +16,8 @@ import {
   hauteurEstimee,
   type ParametresEtages,
 } from '../coeur/facades';
+import { sourceInventaire } from '../donnees/inventaire';
+import { type BilanInventaire, marquerPersistants } from '../coeur/arbres';
 import { type Emprise, COUCHE_CLASSES, COUCHE_MNS, COUCHE_MNT, COUCHE_RGE_ALTI, empriseCalee, urlAltitudes, urlBatiments, urlImage } from '../donnees/ign';
 
 export interface Acces {
@@ -27,10 +29,15 @@ export interface Acces {
   binaire(url: string, service: string, facultatif?: boolean): Promise<ArrayBuffer>;
   /** Image décodée en RGBA (mise en cache). */
   image(url: string, largeur: number, hauteur: number, service: string, facultatif?: boolean): Promise<Uint8ClampedArray | Uint8Array>;
-  json(url: string, service: string): Promise<unknown>;
+  json(url: string, service: string, facultatif?: boolean): Promise<unknown>;
 }
 
 export type ModeRelief = 'lidar' | 'bdtopo';
+
+/** Ce que l'inventaire des arbres de la ville a permis d'identifier autour de l'adresse. */
+export interface InfoInventaire extends BilanInventaire {
+  source: string;
+}
 
 export interface SceneChargee {
   mode: ModeRelief;
@@ -47,6 +54,8 @@ export interface SceneChargee {
   avertissements: string[];
   /** Part de bâtiments sans hauteur fiable (mode BD TOPO). */
   hauteursIncertaines: number;
+  /** Inventaire des arbres utilisé, ou null (ville sans inventaire, ou service indisponible). */
+  inventaire: InfoInventaire | null;
 }
 
 const SERVICE_ALTI = 'd’altimétrie LiDAR HD de l’IGN';
@@ -119,6 +128,15 @@ export async function chargerScene(
     acces.image(urlImage(COUCHE_CLASSES, e1, 'image/png'), e1.largeur, e1.hauteur, 'de classification LiDAR HD', true),
   ]);
 
+  // Inventaire des arbres de la ville, quand il en existe un : facultatif, il ne retarde pas le calcul.
+  const source = sourceInventaire(x, y);
+  const pInventaire = source
+    ? acces.json(source.url(e0.x0, e0.y1 - 512, e0.x0 + 512, e0.y1), `d’inventaire des arbres (${source.nom})`, true).then(
+        (r) => source.lire(r),
+        () => null,
+      )
+    : Promise.resolve(null);
+
   const mns0 = versRaster(await pMns0, e0);
   const manque = partSansDonnee(mns0);
 
@@ -170,6 +188,7 @@ export async function chargerScene(
       aretes,
       avertissements,
       hauteursIncertaines: tous.length ? incertains / tous.length : 0,
+      inventaire: null,
     };
   }
 
@@ -186,6 +205,20 @@ export async function chargerScene(
   progression('Séparation des arbres et des bâtiments…');
   const s0 = construireSurfaces(mns0, mnt0, classes0);
   const niveaux: Niveau[] = [{ dur: s0.dur, arbres: classes0 ? s0.arbres : null }];
+  let inventaire: InfoInventaire | null = null;
+  if (source && classes0) {
+    const recenses = await pInventaire;
+    if (recenses) {
+      const { persistants, bilan } = marquerPersistants(s0.arbres, recenses);
+      // Aucun arbre recensé ici : l'adresse est hors du territoire de l'inventaire (commune voisine).
+      if (bilan.recenses > 0) {
+        niveaux[0].persistants = persistants;
+        inventaire = { source: source.nom, ...bilan };
+      }
+    } else {
+      avertissements.push(`L’inventaire des arbres (${source.nom}) est indisponible : tous les arbres suivent le réglage choisi, sans distinguer les persistants. Relancez la recherche pour réessayer.`);
+    }
+  }
   const mntFin = reechantillonner(mnt0, e0);
   boucherTrous(mntFin, 0);
 
@@ -234,5 +267,6 @@ export async function chargerScene(
     aretes,
     avertissements,
     hauteursIncertaines: 0,
+    inventaire,
   };
 }

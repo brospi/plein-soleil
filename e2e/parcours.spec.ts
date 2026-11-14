@@ -8,7 +8,7 @@ import { type AddressInfo } from 'node:net';
 import { expect, test, type Page } from '@playwright/test';
 
 interface Api {
-  scene(): { mode: string; avertissements: string[]; x: number; y: number } | null;
+  scene(): { mode: string; avertissements: string[]; x: number; y: number; inventaire: { source: string; recenses: number; persistants: number; partIdentifiee: number } | null } | null;
   deplacerCarte(dx: number, dy: number): void;
   inertie3d(active: boolean): void;
   camera3d(): { mode: 'fenetre' | 'ensemble'; x: number; y: number; z: number; cap: number; site: number; champ: number; cible: { x: number; y: number; z: number }; geste: 'deplacer' | 'tourner' } | null;
@@ -35,9 +35,9 @@ declare global {
 }
 
 const ADRESSES = [
-  { ville: 'Paris', saisie: '45 rue de la Roquette 75011 Paris', attendu: /Roquette/i },
-  { ville: 'Montreuil (petite couronne)', saisie: '20 rue du Capitaine Dreyfus Montreuil', attendu: /Dreyfus/i },
-  { ville: 'Lyon', saisie: '8 rue des Capucins 69001 Lyon', attendu: /Capucins/i },
+  { ville: 'Paris', saisie: '45 rue de la Roquette 75011 Paris', attendu: /Roquette/i, inventaire: 'Ville de Paris' },
+  { ville: 'Montreuil (petite couronne)', saisie: '20 rue du Capitaine Dreyfus Montreuil', attendu: /Dreyfus/i, inventaire: null },
+  { ville: 'Lyon', saisie: '8 rue des Capucins 69001 Lyon', attendu: /Capucins/i, inventaire: 'Métropole de Lyon' },
 ];
 
 function surveiller(page: Page): string[] {
@@ -114,6 +114,20 @@ for (const a of ADRESSES) {
       const canvas = page.locator(`#${id} canvas`);
       await expect(canvas).toBeVisible();
       expect((await canvas.boundingBox())!.height).toBeGreaterThan(60);
+    }
+
+    // Inventaire des arbres de la ville : proposé là où il existe, absent ailleurs.
+    const inventaire = await page.evaluate(() => window.pleinSoleil.scene()!.inventaire);
+    if (a.inventaire) {
+      expect(inventaire?.source).toBe(a.inventaire);
+      expect(inventaire!.recenses).toBeGreaterThan(0);
+      console.log(`  inventaire ${inventaire!.source} : ${inventaire!.recenses} arbres, ${inventaire!.persistants} persistants, ${(inventaire!.partIdentifiee * 100).toFixed(0)} % de la canopée identifiée`);
+      await expect(page.locator('#inventaire-libelle')).toContainText(a.inventaire);
+      await expect(page.locator('#inventaire-aide')).toContainText('arbres recensés');
+      await expect(page.locator('#r-inventaire')).toBeChecked();
+    } else {
+      expect(inventaire).toBeNull();
+      await expect(page.locator('#inventaire-ligne')).toBeHidden();
     }
 
     // Changement d'étage : recalcul rapide et résultat différent.

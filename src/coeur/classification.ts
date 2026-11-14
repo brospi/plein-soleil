@@ -18,6 +18,8 @@ export enum Classe {
   Pont = 5,
   Sursol = 6,
   VegetationBasse = 7,
+  /** Arbre à feuillage persistant, identifié par un inventaire (affichage 3D). */
+  VegetationPersistante = 8,
 }
 
 /** Palette de la couche « cartes-classes » (relevée sur le service et sa légende). */

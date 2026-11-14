@@ -62,6 +62,7 @@ e2e/          tests de bout en bout
 - **Deux horizons**, bâti et arbres, grâce à la carte de classes LiDAR HD (`IGNF_LIDAR-HD_CLASS`).
 - **La fenêtre est une surface** : 2 à 6 points en largeur et en hauteur ; l'embrasure et le balcon sont traités analytiquement, les obstacles lointains par échantillonnage.
 - **Position du mur relue sur le LiDAR** à chaque étage le long de la normale (décalage cadastre / LiDAR de 1 à 2 m, étages en retrait), point d'observation 50 cm devant.
+- **Arbres persistants identifiés.** Là où une ville publie l'inventaire de ses arbres (Paris, métropole de Lyon), chaque cellule de canopée LiDAR est rattachée à l'arbre recensé le plus proche. En mode « feuillus », les genres à feuillage persistant restent opaques toute l'année ; la canopée non identifiée (arbres privés) suit le réglage général.
 - **Hauteur d'étage calée par immeuble.** Quand la BD TOPO donne le nombre de niveaux du bâtiment (environ 80 % des cas à Paris), la hauteur d'étage est la hauteur de l'immeuble divisée par ce nombre, si le résultat est plausible (2,4 à 4,2 m). Entre la hauteur LiDAR (toit compris) et la hauteur BD TOPO (à la gouttière), on retient celle qui donne l'étage le plus proche de la valeur par défaut. Sinon : 3 m par étage. Le réglage est désactivable et une saisie manuelle l'emporte.
 - **Azimuts « grille »** : le soleil est ramené dans le repère Lambert 93 par la convergence des méridiens (−0,5° à Paris, +3,4° à Strasbourg).
 
@@ -76,6 +77,7 @@ Tous ces services ont été vérifiés avec un en-tête `Origin` étranger (`Acc
 | Terrain de repli | même WMS, `ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES` (RGE ALTI) | zones sans LiDAR HD |
 | Bâtiments | WFS `data.geopf.fr/wfs/ows`, `BDTOPO_V3:batiment` | renvoie parfois une page non JSON avec un code 200 : relancé |
 | Adresses | `data.geopf.fr/geocodage/search`, repli Photon (`photon.komoot.io`) | Photon est lancé en parallèle si l'IGN n'a pas répondu en 1,2 s ; si le numéro demandé est absent de la Base Adresse Nationale, le numéro existant le plus proche (±10) est cherché et proposé en tête ; à défaut, la rue entière est signalée |
+| Arbres recensés | Ville de Paris (`opendata.paris.fr`, jeu `les-arbres`) et Métropole de Lyon (`data.grandlyon.com`, arbres d'alignement) | arbres publics seulement ; servent à repérer les feuillages persistants |
 | Fonds de carte | WMTS `data.geopf.fr/wmts` (Plan IGN v2, orthophotos) | |
 | Photo aérienne 3D | WMS `HR.ORTHOIMAGERY.ORTHOPHOTOS` | texture optionnelle de la vue 3D |
 
@@ -111,6 +113,7 @@ L'application doit être servie en HTTPS sur un vrai domaine (Web Worker, Indexe
 ## Attributions
 
 - Relief, bâtiments, adresses, fonds de carte : © IGN — Géoplateforme (LiDAR HD, BD TOPO®, Plan IGN, BD ORTHO®), licence Ouverte Etalab 2.0.
+- Inventaires d'arbres : « Les arbres », Direction des Espaces Verts et de l'Environnement, Ville de Paris (ODbL) ; arbres d'alignement, Métropole de Lyon (data.grandlyon.com ; licence à vérifier sur la fiche du jeu de données).
 - Recherche d'adresse de secours : Photon (komoot), données © les contributeurs d'OpenStreetMap (ODbL).
 - Bibliothèques : Leaflet, three.js, jsPDF, police Inter.
 

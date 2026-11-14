@@ -2,7 +2,7 @@
 import { type Arete, type Batiment, type ParametresEtages } from '../coeur/facades';
 import { type Reglages, type ResultatFenetre, type SpecFenetre } from '../coeur/calcul';
 import { type Maillage } from '../coeur/maillage';
-import { type ModeRelief } from './scene';
+import { type InfoInventaire, type ModeRelief } from './scene';
 
 export type Requete =
   | { type: 'charger'; x: number; y: number; etages: ParametresEtages }
@@ -13,6 +13,8 @@ export type Requete =
 export interface InfoScene {
   mode: ModeRelief;
   avertissements: string[];
+  /** Inventaire des arbres de la ville utilisé ici, ou null. */
+  inventaire: InfoInventaire | null;
   batiments: Batiment[];
   aretes: Arete[];
   /** Centre demandé (Lambert 93) et sa position géographique. */

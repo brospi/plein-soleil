@@ -38,6 +38,43 @@ async function etudier(nom: string, lon: number, lat: number) {
 }
 
 describe.skipIf(!reseau)('données réelles IGN', () => {
+  it('Paris 20e : cèdres recensés par la Ville, opaques toute l’année', async () => {
+    // Rue Julien Lacroix : un cèdre de l'Atlas de 15 m figure dans l'inventaire des arbres d'alignement.
+    const { x, y } = versLambert93(2.386092964743129, 48.86850399011441);
+    const sc = await chargerScene(x, y, accesNode, ETAGES_DEFAUT);
+    expect(sc.mode).toBe('lidar');
+    expect(sc.inventaire?.source).toBe('Ville de Paris');
+    console.log(`\nInventaire Paris 20e : ${sc.inventaire!.recenses} arbres recensés, ${sc.inventaire!.persistants} persistants, ${(sc.inventaire!.partIdentifiee * 100).toFixed(0)} % de la canopée identifiée, ${(sc.inventaire!.partPersistante * 100).toFixed(1)} % persistante`);
+    expect(sc.inventaire!.recenses).toBeGreaterThan(20);
+    expect(sc.inventaire!.persistants).toBeGreaterThanOrEqual(1);
+    expect(sc.inventaire!.partPersistante).toBeGreaterThan(0);
+    // De la canopée persistante existe bien dans un rayon de 10 m autour du cèdre.
+    const pers = sc.niveaux[0].persistants!;
+    let cellules = 0;
+    for (let l = 0; l < pers.hauteur; l++) {
+      for (let c = 0; c < pers.largeur; c++) {
+        if (pers.d[l * pers.largeur + c] > -1000 && Math.hypot(pers.x0 + (c + 0.5) * pers.pas - x, pers.y1 - (l + 0.5) * pers.pas - y) < 10) cellules++;
+      }
+    }
+    expect(cellules).toBeGreaterThan(20);
+    // Les façades proches du cèdre : l'inventaire ne peut que réduire le soleil d'hiver, jamais l'augmenter.
+    const geo = depuisLambert93(x, y);
+    const calc = new Calculateur({ niveaux: sc.niveaux, relief: sc.relief, table: tableSolaire(geo.lat, geo.lon), convergence: convergenceMeridiens(geo.lon) });
+    const murs = sc.aretes.filter((a) => a.statut === 'libre' && a.longueur > 4 && Math.hypot((a.ax + a.bx) / 2 - x, (a.ay + a.by) / 2 - y) < 40);
+    let ecartMax = 0;
+    for (const a of murs.slice(0, 25)) {
+      const spec = { x: (a.ax + a.bx) / 2, y: (a.ay + a.by) / 2, nx: a.nx, ny: a.ny, etage: Math.max(a.etageMin, 1), hauteurLibre: null, geometrie: FENETRE_DEFAUT };
+      const avec = calc.calculer(spec, REGLAGES_DEFAUT, false).detail;
+      const sans = calc.calculer(spec, { ...REGLAGES_DEFAUT, inventaireArbres: false }, false).detail;
+      if (!avec || !sans) continue;
+      expect(avec.indicateurs.heuresAn).toBeLessThanOrEqual(sans.indicateurs.heuresAn + 1e-6);
+      const ecart = sans.indicateurs.heuresAn - avec.indicateurs.heuresAn;
+      if (ecart > ecartMax) ecartMax = ecart;
+      if (ecart > 5) console.log(`  façade az ${azimutDe(a.nx, a.ny).toFixed(0)}° : ${sans.indicateurs.heuresAn.toFixed(0)} h/an sans l'inventaire, ${avec.indicateurs.heuresAn.toFixed(0)} h avec (hiver ${sans.indicateurs.moyenneHiver.toFixed(2)} → ${avec.indicateurs.moyenneHiver.toFixed(2)} h/j)`);
+    }
+    console.log(`  écart maximal sur ${Math.min(25, murs.length)} façades voisines : ${ecartMax.toFixed(0)} h/an`);
+  }, 120_000);
+
   it('Paris (LiDAR HD)', async () => {
     const { sc, r } = await etudier('Paris, rue de Rivoli', 2.3604077, 48.8554814);
     expect(sc.mode).toBe('lidar');

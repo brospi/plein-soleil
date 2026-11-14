@@ -48,7 +48,7 @@ async function avecCache(url: string, service: string, type: string, facultatif 
 const acces: Acces = {
   binaire: (url, service, facultatif) => avecCache(url, service, 'image/x-bil', facultatif),
   image: async (url, _l, _h, service, facultatif) => (await decoderPng(await avecCache(url, service, 'image/png', facultatif))).rgba,
-  json: (url, service) => requeteJson(url, { service, surAttente }),
+  json: (url, service, facultatif) => requeteJson(url, facultatif ? { service, surAttente, essais: 2, expirationMs: 8000 } : { service, surAttente }),
 };
 
 let scene: SceneChargee | null = null;
@@ -78,6 +78,7 @@ async function charger(r: Extract<Requete, { type: 'charger' }>): Promise<InfoSc
   return {
     mode: s.mode,
     avertissements: s.avertissements,
+    inventaire: s.inventaire,
     batiments: s.batiments,
     aretes: s.aretes,
     x: r.x,
@@ -153,7 +154,7 @@ function calculer(r: Extract<Requete, { type: 'calculer' }>): { resultat: Result
 }
 
 /** Extrait un carré de cellules d'un niveau (surface visible : canopée ou bâti). */
-function extraire(dur: Raster, arbres: Raster | null, classes: Uint8Array | null, x: number, y: number, rayon: number) {
+function extraire(dur: Raster, arbres: Raster | null, classes: Uint8Array | null, x: number, y: number, rayon: number, persistants: Raster | null = null) {
   const c0 = Math.max(0, Math.floor((x - rayon - dur.x0) / dur.pas));
   const c1 = Math.min(dur.largeur, Math.ceil((x + rayon - dur.x0) / dur.pas));
   const l0 = Math.max(0, Math.floor((dur.y1 - (y + rayon)) / dur.pas));
@@ -169,7 +170,7 @@ function extraire(dur: Raster, arbres: Raster | null, classes: Uint8Array | null
       const o = l * largeur + c;
       if (a > -1000) {
         h[o] = a;
-        cl[o] = Classe.Vegetation;
+        cl[o] = persistants && persistants.d[i] > -1000 ? Classe.VegetationPersistante : Classe.Vegetation;
       } else {
         h[o] = Math.max(dur.d[i], -100);
         cl[o] = classes ? (classes[i] === Classe.Vegetation ? Classe.Sol : classes[i]) : Classe.Sol;
@@ -186,7 +187,7 @@ function mailler(r: Extract<Requete, { type: 'maillage' }>): { resultat: Resulta
   if (!scene) throw new Error('Aucune adresse chargée.');
   const z0 = valeurLisse(scene.relief.mnt, r.x, r.y, 0);
   const n0 = scene.niveaux[0];
-  const e = extraire(n0.dur, n0.arbres, scene.classes, r.x, r.y, r.rayon);
+  const e = extraire(n0.dur, n0.arbres, scene.classes, r.x, r.y, r.rayon, n0.persistants ?? null);
   const proche = maillerRelief(lisserRelief(e.h, e.largeur, e.hauteur), e.cl, e.largeur, e.hauteur, n0.dur.pas, { seuil: 1.2, ox: e.ox, oz: e.oz, z0 });
   let lointain = null;
   const n1 = scene.niveaux[1];

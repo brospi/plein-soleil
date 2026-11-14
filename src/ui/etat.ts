@@ -98,7 +98,7 @@ export function encoderEtat(e: EtatLogement): string {
   const compact = {
     v: 1,
     a: e.adresse ? [e.adresse.libelle, arrondi(e.adresse.x, 1), arrondi(e.adresse.y, 1)] : null,
-    r: [r.hauteurEtage, r.allege, r.arbres, r.transmissionHiver, r.troubleLinke, r.hauteurEtageAuto ? 1 : 0],
+    r: [r.hauteurEtage, r.allege, r.arbres, r.transmissionHiver, r.troubleLinke, r.hauteurEtageAuto ? 1 : 0, r.inventaireArbres ? 1 : 0],
     i: e.actif,
     f: e.fenetres.map((f) => [
       arrondi(f.x),
@@ -133,6 +133,8 @@ export function decoderEtat(code: string): EtatLogement | null {
       hauteurEtage: nombreValide(c.r[0], 2.2, 5, REGLAGES_DEFAUT.hauteurEtage),
       // Les liens créés avant le calage automatique gardent leur hauteur d'étage fixe : mêmes résultats qu'à l'époque.
       hauteurEtageAuto: c.r[5] === 1,
+      // Même principe pour l'inventaire des arbres : absent des anciens liens, donc désactivé.
+      inventaireArbres: c.r[6] === 1,
       allege: nombreValide(c.r[1], 0, 2, REGLAGES_DEFAUT.allege),
       arbres: nombreValide(c.r[2], 0, 2, REGLAGES_DEFAUT.arbres) as ModeArbres,
       transmissionHiver: nombreValide(c.r[3], 0, 1, REGLAGES_DEFAUT.transmissionHiver),

@@ -39,6 +39,8 @@ export interface Echantillons {
   /** [ix * nz + iz] → tangentes de l'horizon bâti par azimut. */
   tanDur: Float32Array[];
   tanArb: Float32Array[];
+  /** Horizon des seuls arbres persistants identifiés par un inventaire (−∞ sans inventaire). */
+  tanPers?: Float32Array[];
 }
 
 export interface ParametresSimulation {
@@ -52,6 +54,11 @@ export interface ParametresSimulation {
   arbres: ModeArbres;
   /** Part de lumière traversant les feuillus hors saison (0 à 1). */
   transmissionHiver: number;
+  /**
+   * Tenir compte des arbres persistants identifiés par un inventaire : en mode
+   * « feuillus », ils restent opaques toute l'année.
+   */
+  persistantsConnus?: boolean;
   altitude: number;
   troubleLinke?: number;
   /** Conserver l'état de chaque créneau (calendrier solaire). */
@@ -132,6 +139,7 @@ export function simuler(p: ParametresSimulation): ResultatSimulation {
   let energieRef = 0;
   let joursSans = 0;
   const centre = Math.floor(nx / 2) * nz + Math.floor(nz / 2);
+  const tanPers = p.persistantsConnus && p.arbres === ModeArbres.Feuillus && ech.tanPers ? ech.tanPers : null;
 
   for (let j = 0; j < jours; j++) {
     const c0 = table.lever[j];
@@ -207,7 +215,9 @@ export function simuler(p: ParametresSimulation): ResultatSimulation {
           const s = ix * nz + iz;
           if (tanEl > ech.tanDur[s][jk]) {
             fDur += w;
-            f += tanEl > ech.tanArb[s][jk] ? w : w * tau;
+            if (tanEl > ech.tanArb[s][jk]) f += w;
+            // Derrière un arbre : la lumière ne filtre (hors saison) que si ce n'est pas un persistant.
+            else if (tau > 0 && (!tanPers || tanEl > tanPers[s][jk])) f += w * tau;
           }
         }
       }

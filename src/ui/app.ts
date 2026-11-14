@@ -280,6 +280,20 @@ export function demarrer(): void {
     parId('r-trans-texte').textContent = `${Math.round(etat.reglages.transmissionHiver * 100)} %`;
     document.querySelectorAll<HTMLInputElement>('input[name="arbres"]').forEach((r) => (r.checked = Number(r.value) === etat.reglages.arbres));
     parId('trans-ligne').hidden = etat.reglages.arbres !== ModeArbres.Feuillus || scene?.mode === 'bdtopo';
+    // Inventaire des arbres de la ville : proposé seulement là où il existe.
+    const inv = scene?.inventaire ?? null;
+    parId('inventaire-ligne').hidden = !inv;
+    if (inv) {
+      champ('r-inventaire').checked = etat.reglages.inventaireArbres;
+      parId('inventaire-libelle').textContent = `Utiliser l’inventaire des arbres de la ${inv.source}`;
+      const part = `${pourcent(inv.partIdentifiee)} de la canopée autour de l’adresse correspond à un arbre recensé ; les arbres privés (cours, jardins) n’y figurent pas et suivent le réglage ci-dessus.`;
+      parId('inventaire-aide').textContent =
+        inv.persistants === 0
+          ? `${nombre(inv.recenses)} arbres recensés ici, aucun à feuillage persistant : l’inventaire ne change rien au calcul. ${part}`
+          : etat.reglages.arbres !== ModeArbres.Feuillus
+            ? `${nombre(inv.recenses)} arbres recensés ici, dont ${nombre(inv.persistants)} à feuillage persistant. Sans effet dans ce mode : il ne sert qu’avec « Feuillus ».`
+            : `${nombre(inv.recenses)} arbres recensés ici, dont ${nombre(inv.persistants)} à feuillage persistant (pins, cèdres, cyprès…)${etat.reglages.inventaireArbres ? ', comptés opaques toute l’année' : ''}. ${part}`;
+    }
     parId('arbres-aide').textContent =
       scene?.mode === 'bdtopo'
         ? 'Sans LiDAR HD, les arbres ne sont pas connus sur cette zone.'
@@ -355,6 +369,10 @@ export function demarrer(): void {
   });
   champ('f-balcon').addEventListener('change', () => {
     fenetreActive()!.balcon = champ('f-balcon').checked;
+    void lancerCalcul();
+  });
+  champ('r-inventaire').addEventListener('change', () => {
+    etat.reglages.inventaireArbres = champ('r-inventaire').checked;
     void lancerCalcul();
   });
   champ('r-trans').addEventListener('input', () => {

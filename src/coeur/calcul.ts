@@ -27,6 +27,8 @@ export interface Reglages {
   arbres: ModeArbres;
   transmissionHiver: number;
   troubleLinke: number;
+  /** Utiliser l'inventaire des arbres de la ville, quand il existe : les persistants restent opaques toute l'année. */
+  inventaireArbres: boolean;
 }
 
 export const REGLAGES_DEFAUT: Reglages = {
@@ -36,6 +38,7 @@ export const REGLAGES_DEFAUT: Reglages = {
   arbres: ModeArbres.Feuillus,
   transmissionHiver: 0.5,
   troubleLinke: 3,
+  inventaireArbres: true,
 };
 
 export interface SpecFenetre {
@@ -134,18 +137,21 @@ export class Calculateur {
     const fx = this.faisceaux(s, decalage, nx);
     const tanDur: Float32Array[] = [];
     const tanArb: Float32Array[] = [];
+    const tanPers: Float32Array[] = [];
     for (let ix = 0; ix < nx; ix++) {
       for (let iz = 0; iz < nz; iz++) {
         const z = zCentre + ((iz + 0.5) / nz - 0.5) * s.geometrie.hauteur;
         const d = new Float32Array(fx[ix].nk);
         const a = new Float32Array(fx[ix].nk);
-        horizonPourAltitude(fx[ix], z, d, a);
+        const pe = new Float32Array(fx[ix].nk);
+        horizonPourAltitude(fx[ix], z, d, a, pe);
         tanDur.push(d);
         tanArb.push(a);
+        tanPers.push(pe);
       }
     }
     const f0 = fx[0];
-    return { nx, nz, pasAz: f0.pasAz, nAz: f0.nAz, k0: f0.k0, nk: f0.nk, tanDur, tanArb };
+    return { nx, nz, pasAz: f0.pasAz, nAz: f0.nAz, k0: f0.k0, nk: f0.nk, tanDur, tanArb, tanPers };
   }
 
   /**
@@ -191,6 +197,7 @@ export class Calculateur {
       fenetre: s.geometrie,
       arbres: r.arbres,
       transmissionHiver: r.transmissionHiver,
+      persistantsConnus: r.inventaireArbres,
       altitude: an.sol,
       troubleLinke: r.troubleLinke,
     };

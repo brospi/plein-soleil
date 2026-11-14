@@ -42,6 +42,8 @@ const COULEUR_SOL: RVB = [124, 122, 118];
 const COULEUR_HERBE: RVB = [137, 165, 104];
 const COULEUR_ARBRE: RVB = [72, 122, 62];
 const COULEUR_TRONC: RVB = [58, 98, 52];
+const COULEUR_PERSISTANT: RVB = [44, 92, 78];
+const COULEUR_TRONC_PERSISTANT: RVB = [36, 74, 64];
 const COULEUR_EAU: RVB = [112, 148, 176];
 const COULEUR_PONT: RVB = [150, 150, 152];
 const COULEUR_SURSOL: RVB = [178, 172, 162];
@@ -52,6 +54,8 @@ function couleurDessus(classe: number): RVB {
       return COULEUR_TOIT;
     case Classe.Vegetation:
       return COULEUR_ARBRE;
+    case Classe.VegetationPersistante:
+      return COULEUR_PERSISTANT;
     case Classe.VegetationBasse:
       return COULEUR_HERBE;
     case Classe.Eau:
@@ -67,6 +71,7 @@ function couleurDessus(classe: number): RVB {
 
 function couleurMur(classe: number): RVB {
   if (classe === Classe.Vegetation) return COULEUR_TRONC;
+  if (classe === Classe.VegetationPersistante) return COULEUR_TRONC_PERSISTANT;
   if (classe === Classe.Batiment || classe === Classe.Sursol) return COULEUR_MUR;
   return COULEUR_PONT;
 }
@@ -170,7 +175,7 @@ export function maillerRelief(h: Float32Array, classes: Uint8Array | null, large
       const gz = ((l + 1 < hauteur ? d(i + largeur) : 0) - (l > 0 ? d(i - largeur) : 0)) / (2 * pas);
       const norme = Math.hypot(gx, 1, gz);
       const cl = classes ? classes[i] : Classe.Sol;
-      const v = cl === Classe.Vegetation ? bruit(c, l) * 2.2 + Math.min(2, (z - z0) / 25) : bruit(c, l);
+      const v = cl === Classe.Vegetation || cl === Classe.VegetationPersistante ? bruit(c, l) * 2.2 + Math.min(2, (z - z0) / 25) : bruit(c, l);
       sommet(ox + c * pas, z - z0, oz + l * pas, -gx / norme, 1 / norme, -gz / norme, couleurDessus(cl), v);
     }
   }
