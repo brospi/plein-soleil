@@ -135,7 +135,7 @@ export function demarrer(): void {
    * à la vue de la carte. Les murs déjà affichés restent en place jusqu'à
    * l'arrivée des nouveaux.
    */
-  async function rechargerZone(x: number, y: number): Promise<void> {
+  async function rechargerZone(x: number, y: number, depuis3D = false): Promise<void> {
     if (!etat.adresse) return;
     const moi = ++jetonScene;
     centreDemande = { x, y };
@@ -159,7 +159,13 @@ export function demarrer(): void {
       document.querySelectorAll<HTMLInputElement>('input[name="arbres"]').forEach((r) => (r.disabled = s.mode === 'bdtopo'));
       if (!s.aretes.some((a) => a.statut === 'libre')) etatChargement('Aucun bâtiment n’a été trouvé dans cette zone. Déplacez la carte vers un immeuble.', true);
       majURL();
-      if (vue3dVisible) void preparer3D(true);
+      if (depuis3D && vue3d) {
+        // La 3D a demandé la zone : on remaille autour du point visé sans bouger la caméra,
+        // et la carte suit pour rester cohérente au retour.
+        await vue3d.suivreScene(s, x, y);
+        vue3d.definirFenetres(observations());
+        carte.centrer(x, y, carte.centre().zoom);
+      } else if (vue3dVisible) void preparer3D(true);
       if (etat.fenetres.length) await lancerCalcul();
       else {
         resultat = null;
@@ -186,9 +192,37 @@ export function demarrer(): void {
     else boutonRecharger.hidden = false;
   }, 450);
   boutonRecharger.addEventListener('click', () => {
+    if (vue3dVisible && pointVise3D) {
+      void rechargerZone(pointVise3D.x, pointVise3D.y, true);
+      pointVise3D = null;
+      return;
+    }
     const c = carte.centre();
     void rechargerZone(c.x, c.y);
   });
+
+  /**
+   * En 3D, la zone suit le point visé comme elle suit la carte : rechargement
+   * automatique, sauf si des fenêtres placées en sortiraient (on demande alors).
+   */
+  let pointVise3D: { x: number; y: number } | null = null;
+  async function suivre3D(x: number, y: number): Promise<void> {
+    if (!etat.adresse || !scene || !vue3dVisible) return;
+    if (etat.fenetres.some((f) => Math.hypot(f.x - x, f.y - y) > PORTEE_FENETRE)) {
+      pointVise3D = { x, y };
+      boutonRecharger.hidden = false;
+      return;
+    }
+    pointVise3D = null;
+    boutonRecharger.hidden = true;
+    const message = parId('vue3d-message');
+    message.hidden = false;
+    message.textContent = 'Chargement du relief autour de ce point…';
+    const avant = scene;
+    await rechargerZone(x, y, true);
+    if (scene === avant) message.textContent = 'Le relief autour de ce point n’a pas pu être chargé. Déplacez un peu la vue pour réessayer.';
+    else message.hidden = true;
+  }
 
   function afficherAvertissements(): void {
     const racine = parId('avertissements');
@@ -743,6 +777,12 @@ export function demarrer(): void {
           placerFenetre({ x: proche.x, y: proche.y, az: azimutDe(proche.arete.nx, proche.arete.ny), arete: proche.arete }, p.altitude);
         };
         vue3d.definirJour(jour);
+        vue3d.surBord = suivre3D;
+        vue3d.surRetour = () => {
+          if (!pointVise3D) return;
+          pointVise3D = null;
+          boutonRecharger.hidden = true;
+        };
         nouvelleScene = true;
       }
       if (nouvelleScene) {
@@ -769,7 +809,8 @@ export function demarrer(): void {
     parId('vue3d').hidden = !troisD;
     parId('fond-bouton').hidden = troisD;
     plan.classList.toggle('plan--3d', troisD);
-    if (troisD) boutonRecharger.hidden = true;
+    boutonRecharger.hidden = true;
+    pointVise3D = null;
     parId('carte-aide').textContent = troisD
       ? (vue3d?.aide ?? AIDE_3D)
       : AIDE_CARTE;

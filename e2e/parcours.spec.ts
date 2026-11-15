@@ -11,7 +11,7 @@ interface Api {
   scene(): { mode: string; avertissements: string[]; x: number; y: number; inventaire: { source: string; recenses: number; persistants: number; partIdentifiee: number } | null } | null;
   deplacerCarte(dx: number, dy: number): void;
   inertie3d(active: boolean): void;
-  camera3d(): { mode: 'fenetre' | 'ensemble'; x: number; y: number; z: number; cap: number; site: number; champ: number; cible: { x: number; y: number; z: number }; geste: 'deplacer' | 'tourner'; etendue: string; rayonTotal: number; anneaux: number; triangles: number; loin: number } | null;
+  camera3d(): { mode: 'fenetre' | 'ensemble'; x: number; y: number; z: number; cap: number; site: number; champ: number; cible: { x: number; y: number; z: number }; geste: 'deplacer' | 'tourner'; etendue: string; rayonTotal: number; anneaux: number; triangles: number; loin: number; centre: { x: number; y: number }; suivi: boolean } | null;
   resultat(): {
     dureeMs: number;
     fenetres: Array<{
@@ -249,6 +249,10 @@ test('mode agrandi : bascule Carte / 3D, et vue depuis la fenêtre choisie', asy
   expect(Math.hypot(c4.cible.x, c4.cible.z)).toBeLessThan(Math.hypot(c3.cible.x, c3.cible.z));
 
   // Étendue du relief : par défaut 450 m ; on passe à 4 km sans perdre le point de vue, et le choix est mémorisé.
+  // (On attend d'abord que la zone ait fini de suivre la caméra.)
+  const stable = () => page.waitForFunction(() => window.pleinSoleil.camera3d()?.suivi === false, undefined, { timeout: 90_000 });
+  await stable();
+  await expect(page.locator('#vue3d-message')).toBeHidden({ timeout: 30_000 });
   const avantEtendue = (await page.evaluate(() => window.pleinSoleil.camera3d()))!;
   expect(avantEtendue.etendue).toBe('standard');
   expect(avantEtendue.rayonTotal).toBe(460);
@@ -386,6 +390,62 @@ test('déplacer la carte charge les bâtiments de la nouvelle zone', async ({ pa
   await page.waitForFunction(() => window.pleinSoleil.etat().fenetres.length === 0, undefined, { timeout: 60_000 });
   await expect(page.locator('#resultats')).toBeHidden();
   await expect(page.locator('#annonce')).toContainText('retirée');
+  expect(erreurs, erreurs.join('\n')).toEqual([]);
+});
+
+test('en 3D, la zone chargée suit la caméra quand on s’éloigne du centre', async ({ page }) => {
+  const erreurs = surveiller(page);
+  const a = ADRESSES[0];
+  await chercher(page, a.saisie, a.attendu);
+  const depart = await page.evaluate(() => ({ x: window.pleinSoleil.scene()!.x, y: window.pleinSoleil.scene()!.y }));
+  await page.locator('#plan-agrandir').click();
+  await page.locator('#onglet-3d').click();
+  await expect(page.locator('#vue3d-canvas')).toBeVisible();
+  await page.waitForFunction(() => (window.pleinSoleil.camera3d()?.triangles ?? 0) > 0, undefined, { timeout: 60_000 });
+  await expect(page.locator('#vue3d-message')).toBeHidden({ timeout: 30_000 });
+  await page.evaluate(() => window.pleinSoleil.inertie3d(false));
+
+  // Glisser vers la gauche jusqu'à viser à plus de 70 m du centre.
+  const toile = (await page.locator('#vue3d-canvas').boundingBox())!;
+  const mx = toile.x + toile.width / 2;
+  const my = toile.y + toile.height / 3;
+  for (let i = 0; i < 6; i++) {
+    const c = (await page.evaluate(() => window.pleinSoleil.camera3d()))!;
+    if (Math.hypot(c.centre.x + c.cible.x - depart.x, c.centre.y - c.cible.z - depart.y) > 120) break;
+    await page.mouse.move(mx, my);
+    await page.mouse.down();
+    await page.mouse.move(mx - 300, my, { steps: 4 });
+    await page.mouse.up();
+  }
+  // Point visé en Lambert 93 (centre du relief + position locale) : indépendant des rechargements.
+  const avant = (await page.evaluate(() => window.pleinSoleil.camera3d()))!;
+  const viseAvant = { x: avant.centre.x + avant.cible.x, y: avant.centre.y - avant.cible.z };
+  expect(Math.hypot(viseAvant.x - depart.x, viseAvant.y - depart.y)).toBeGreaterThan(70);
+
+  // La zone se recharge autour du point visé, sans que la caméra bouge.
+  await page.waitForFunction(({ x, y }) => {
+    const s = window.pleinSoleil.scene();
+    return s !== null && Math.hypot(s.x - x, s.y - y) > 60;
+  }, depart, { timeout: 90_000 });
+  await page.waitForFunction(({ x, y }) => {
+    const c = window.pleinSoleil.camera3d();
+    return c !== null && Math.hypot(c.centre.x - x, c.centre.y - y) > 60;
+  }, depart, { timeout: 60_000 });
+  await page.waitForFunction(() => window.pleinSoleil.camera3d()?.suivi === false, undefined, { timeout: 90_000 });
+  await expect(page.locator('#vue3d-message')).toBeHidden({ timeout: 30_000 });
+  const apres = (await page.evaluate(() => window.pleinSoleil.camera3d()))!;
+  const viseApres = { x: apres.centre.x + apres.cible.x, y: apres.centre.y - apres.cible.z };
+  expect(Math.hypot(viseApres.x - viseAvant.x, viseApres.y - viseAvant.y)).toBeLessThan(0.5);
+  // Le nouveau relief est centré près du point visé (un glissement a pu se poursuivre pendant le chargement).
+  expect(Math.hypot(apres.cible.x, apres.cible.z)).toBeLessThanOrEqual(70);
+  // Les bâtiments de la nouvelle zone sont là, et la carte a suivi.
+  const scene = (await page.evaluate(() => window.pleinSoleil.scene()))!;
+  expect(Math.hypot(scene.x - apres.centre.x, scene.y - apres.centre.y)).toBeLessThan(1);
+  await expect(page.locator('#plan-recharger')).toBeHidden();
+  await page.locator('#onglet-carte').click();
+  await expect(page.locator('#carte')).toBeVisible();
+  const proche = await page.evaluate(() => window.pleinSoleil.murs()[0]?.distance ?? 1e9);
+  expect(proche).toBeLessThan(80);
   expect(erreurs, erreurs.join('\n')).toEqual([]);
 });
 

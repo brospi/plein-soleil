@@ -56,7 +56,7 @@ e2e/          tests de bout en bout
 
 ### Idées clés
 
-- **La zone chargée suit la carte.** Bâtiments et relief fin ne sont téléchargés que dans un rayon de 160 m. Quand la carte s'en éloigne de plus de 70 m, la zone est rechargée à l'endroit affiché ; si une fenêtre est déjà placée, un bouton le propose au lieu de le faire d'office.
+- **La zone chargée suit la carte.** Bâtiments et relief fin ne sont téléchargés que dans un rayon de 160 m. Quand la carte s'en éloigne de plus de 70 m, la zone est rechargée à l'endroit affiché ; si une fenêtre est déjà placée, un bouton le propose au lieu de le faire d'office. En 3D, c'est le point visé par la caméra qui compte : quand il s'arrête à plus de 70 m du centre, la zone et le relief sont rechargés autour de lui sans bouger la caméra, et la carte suit.
 - **Relief en trois niveaux**, une requête WMS par niveau, calée sur une grille pour que le cache serve : 0,5 m sur 512 m de côté, 2 m sur 2 km, 8 m sur 8 km.
 - **Enveloppes d'horizon.** Pour chaque azimut (pas de 0,25°), le rayon traverse les cellules du raster par un parcours de grille exact. On ne garde que l'enveloppe convexe supérieure du profil (distance, altitude) : elle suffit pour retrouver l'angle d'horizon depuis n'importe quelle hauteur sur la même verticale. Changer d'étage ne relance donc aucun rayon (10 à 40 ms mesurés).
 - **Deux horizons**, bâti et arbres, grâce à la carte de classes LiDAR HD (`IGNF_LIDAR-HD_CLASS`).

@@ -138,6 +138,7 @@ export class Vue3D {
     this.appliquerGeste();
     this.commandes.addEventListener('change', () => {
       this.retenirCible();
+      this.guetterBord();
       this.demanderRendu();
     });
 
@@ -409,23 +410,98 @@ export class Vue3D {
     const message = parId('vue3d-message');
     message.hidden = false;
     message.textContent = 'Construction du relief 3D…';
-    const camera = this.camera.position.clone();
-    const cible = this.commandes.target.clone();
-    const regard = this.vueFenetre;
     try {
-      await this.chargerScene(this.sceneCourante, this.centreCourant);
-      // On garde le point de vue de l'utilisateur.
-      if (regard) this.basculerVueFenetre(true);
-      else {
-        this.camera.position.copy(camera);
-        this.commandes.target.copy(cible);
-        this.arreterInertie();
-      }
+      // Scène et centre pris au moment du remaillage : un suivi de la caméra a pu passer avant.
+      await this.remailler(null);
       message.hidden = true;
     } catch (e) {
       message.textContent = `Le relief 3D n’a pas pu être construit : ${(e as Error).message}`;
     }
     this.demanderRendu();
+  }
+
+  /**
+   * Remaille autour d'un autre centre (ou du même) en gardant le point de vue :
+   * caméra et point visé sont décalés de l'écart entre l'ancien et le nouveau
+   * repère, la vue depuis la fenêtre et la photo aérienne sont conservées.
+   */
+  private remailler(cible: { scene: InfoScene; centre: { x: number; y: number; az: number | null } } | null): Promise<void> {
+    // Un remaillage à la fois : chacun part de la vue laissée par le précédent.
+    const tache = this.fileRemaillage.then(() => {
+      const scene = cible?.scene ?? this.sceneCourante;
+      const centre = cible?.centre ?? this.centreCourant;
+      return scene && centre ? this.remaillerMaintenant(scene, centre) : undefined;
+    });
+    this.fileRemaillage = tache.catch(() => undefined);
+    return tache;
+  }
+  private fileRemaillage: Promise<void> = Promise.resolve();
+
+  private async remaillerMaintenant(scene: InfoScene, centre: { x: number; y: number; az: number | null }): Promise<void> {
+    const ancien = this.infos;
+    const camera = this.camera.position.clone();
+    const cible = this.commandes.target.clone();
+    const regard = this.vueFenetre;
+    const photo = this.texture !== null && this.matToits.map === this.texture;
+    await this.chargerScene(scene, centre);
+    if (regard) this.basculerVueFenetre(true);
+    else if (ancien && this.infos) {
+      const ecart = new THREE.Vector3(ancien.x - this.infos.x, ancien.z0 - this.infos.z0, this.infos.y - ancien.y);
+      this.camera.position.copy(camera.add(ecart));
+      this.commandes.target.copy(cible.add(ecart));
+      this.retenirCible();
+      this.arreterInertie();
+    }
+    if (photo) {
+      parId('v3-texture').setAttribute('aria-pressed', 'true');
+      void this.chargerTexture(true);
+    }
+    this.demanderRendu();
+  }
+
+  /* ---------- Suivi de la caméra : la zone chargée se déplace avec la vue ---------- */
+  /**
+   * Appelé quand le point visé s'est arrêté loin du centre du relief chargé,
+   * avec sa position en Lambert 93. L'application recharge alors la zone
+   * autour de ce point et appelle `suivreScene`.
+   */
+  surBord: ((x: number, y: number) => Promise<void>) | null = null;
+  /** Appelé quand le point visé est revenu près du centre. */
+  surRetour: (() => void) | null = null;
+  private bordEnCours = false;
+  private minuterieBord = 0;
+
+  /** Distance (m) du point visé au centre au-delà de laquelle la zone suit, comme sur la carte. */
+  static readonly SEUIL_SUIVI = 70;
+
+  private guetterBord(): void {
+    if (!this.surBord || !this.infos || this.vueFenetre) return;
+    clearTimeout(this.minuterieBord);
+    this.minuterieBord = window.setTimeout(() => {
+      this.minuterieBord = 0;
+      const infos = this.infos;
+      if (!infos || !this.surBord || this.vueFenetre || this.bordEnCours) return;
+      const c = this.commandes.target;
+      if (Math.hypot(c.x, c.z) <= Vue3D.SEUIL_SUIVI) {
+        this.surRetour?.();
+        return;
+      }
+      this.bordEnCours = true;
+      const x = infos.x + c.x;
+      const y = infos.y - c.z;
+      void this.surBord(x, y).finally(() => {
+        this.bordEnCours = false;
+        // La vue a pu continuer à bouger pendant le chargement : on revérifie.
+        const i = this.infos;
+        const t = this.commandes.target;
+        if (i && Math.hypot(i.x + t.x - x, i.y - t.z - y) > 1) this.guetterBord();
+      });
+    }, 550);
+  }
+
+  /** Remaille autour d'un nouveau centre (zone rechargée), sans bouger la caméra. */
+  async suivreScene(scene: InfoScene, x: number, y: number): Promise<void> {
+    await this.remailler({ scene, centre: { x, y, az: null } });
   }
 
   /* ---------- Vue depuis la fenêtre ---------- */
@@ -459,7 +535,7 @@ export class Vue3D {
   }
 
   /** Mode, position et regard de la caméra (diagnostic et tests). */
-  etatCamera(): { mode: 'fenetre' | 'ensemble'; x: number; y: number; z: number; cap: number; site: number; champ: number; cible: { x: number; y: number; z: number }; geste: 'deplacer' | 'tourner'; etendue: string; rayonTotal: number; anneaux: number; triangles: number; loin: number } {
+  etatCamera(): { mode: 'fenetre' | 'ensemble'; x: number; y: number; z: number; cap: number; site: number; champ: number; cible: { x: number; y: number; z: number }; geste: 'deplacer' | 'tourner'; etendue: string; rayonTotal: number; anneaux: number; triangles: number; loin: number; centre: { x: number; y: number }; suivi: boolean } {
     const p = this.camera.position;
     const c = this.commandes.target;
     return {
@@ -477,6 +553,8 @@ export class Vue3D {
       anneaux: this.infos?.anneaux.length ?? 0,
       triangles: this.infos?.triangles ?? 0,
       loin: this.camera.far,
+      centre: { x: this.infos?.x ?? 0, y: this.infos?.y ?? 0 },
+      suivi: this.bordEnCours || this.minuterieBord !== 0,
     };
   }
 

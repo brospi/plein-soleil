@@ -469,6 +469,11 @@ h3 + .aide {
   z-index: 800;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
 }
+/* En 3D, le bas est occupé par les commandes : la proposition passe en haut, sous les messages. */
+.plan--3d .plan__recharger {
+  bottom: auto;
+  top: 56px;
+}
 .plan__recharger:active {
   transform: translateX(-50%) translateY(1px);
 }
