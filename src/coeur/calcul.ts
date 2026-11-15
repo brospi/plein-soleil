@@ -2,7 +2,7 @@
  * Orchestration du calcul pour une fenêtre : analyse de la façade, masques
  * d'horizon, simulation de chaque étage. Indépendant du navigateur (testable).
  */
-import { type Niveau, type Faisceau, calculerFaisceau, horizonPourAltitude } from './horizon';
+import { type Niveau, type Faisceau, type MasqueArbres, calculerFaisceau, creerMasque, horizonPourAltitude } from './horizon';
 import { type Relief, type AnalysePoint, analyserPoint, decalageDuMur, azimutDe } from './facades';
 import { valeur } from './raster';
 import { type GeometrieFenetre, grilleEchantillons } from './fenetre';
@@ -92,7 +92,12 @@ export interface ResultatFenetre {
   /** Durées de calcul (ms), pour le suivi des performances. */
   chrono: { horizon: number; simulation: number };
   /** Profil d'horizon du point central pour le diagramme solaire (degrés, par azimut calculé). */
-  horizon: { k0: number; nk: number; pasAz: number; bati: Float32Array; arbres: Float32Array } | null;
+  /**
+   * `arbres` : sommet de la végétation ; `arbresBas` : sommet de celle qui descend jusqu'au sol ;
+   * `houppiers` : angle où commencent les houppiers proches (90 s'il n'y en a pas). Entre
+   * `arbresBas` et `houppiers`, le soleil passe sous les arbres.
+   */
+  horizon: { k0: number; nk: number; pasAz: number; bati: Float32Array; arbres: Float32Array; arbresBas: Float32Array; houppiers: Float32Array } | null;
 }
 
 const MARGE_AIR = 0.5;
@@ -136,22 +141,22 @@ export class Calculateur {
     const { nx, nz } = grilleEchantillons(s.geometrie);
     const fx = this.faisceaux(s, decalage, nx);
     const tanDur: Float32Array[] = [];
-    const tanArb: Float32Array[] = [];
-    const tanPers: Float32Array[] = [];
+    const arbres: MasqueArbres[] = [];
+    const persistants: MasqueArbres[] = [];
     for (let ix = 0; ix < nx; ix++) {
       for (let iz = 0; iz < nz; iz++) {
         const z = zCentre + ((iz + 0.5) / nz - 0.5) * s.geometrie.hauteur;
         const d = new Float32Array(fx[ix].nk);
-        const a = new Float32Array(fx[ix].nk);
-        const pe = new Float32Array(fx[ix].nk);
+        const a = creerMasque(fx[ix].nk);
+        const pe = creerMasque(fx[ix].nk);
         horizonPourAltitude(fx[ix], z, d, a, pe);
         tanDur.push(d);
-        tanArb.push(a);
-        tanPers.push(pe);
+        arbres.push(a);
+        persistants.push(pe);
       }
     }
     const f0 = fx[0];
-    return { nx, nz, pasAz: f0.pasAz, nAz: f0.nAz, k0: f0.k0, nk: f0.nk, tanDur, tanArb, tanPers };
+    return { nx, nz, pasAz: f0.pasAz, nAz: f0.nAz, k0: f0.k0, nk: f0.nk, tanDur, arbres, persistants };
   }
 
   /**
@@ -242,12 +247,18 @@ export class Calculateur {
       const centre = Math.floor(ech.nx / 2) * ech.nz + Math.floor(ech.nz / 2);
       const bati = new Float32Array(ech.nk);
       const arbres = new Float32Array(ech.nk);
+      const arbresBas = new Float32Array(ech.nk);
+      const houppiers = new Float32Array(ech.nk);
+      const m = ech.arbres[centre];
+      // Math.atan(±∞) = ±90° : pas de végétation, ou pas de houppier proche.
+      const degres = (t: number): number => (Math.atan(t) * 180) / Math.PI;
       for (let j = 0; j < ech.nk; j++) {
-        bati[j] = (Math.atan(ech.tanDur[centre][j]) * 180) / Math.PI;
-        const ta = ech.tanArb[centre][j];
-        arbres[j] = ta === -Infinity ? -90 : (Math.atan(ta) * 180) / Math.PI;
+        bati[j] = degres(ech.tanDur[centre][j]);
+        arbres[j] = degres(m.sommet[j]);
+        arbresBas[j] = degres(m.bas[j]);
+        houppiers[j] = degres(m.houppier[j]);
       }
-      horizon = { k0: ech.k0, nk: ech.nk, pasAz: ech.pasAz, bati, arbres };
+      horizon = { k0: ech.k0, nk: ech.nk, pasAz: ech.pasAz, bati, arbres, arbresBas, houppiers };
     }
     const total = performance.now() - t0;
     return {

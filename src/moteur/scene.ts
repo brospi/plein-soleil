@@ -17,7 +17,7 @@ import {
   type ParametresEtages,
 } from '../coeur/facades';
 import { sourceInventaire } from '../donnees/inventaire';
-import { type BilanInventaire, marquerPersistants } from '../coeur/arbres';
+import { type BilanInventaire, basesHouppiers, marquerPersistants } from '../coeur/arbres';
 import { type Emprise, COUCHE_CLASSES, COUCHE_MNS, COUCHE_MNT, COUCHE_RGE_ALTI, empriseCalee, urlAltitudes, urlBatiments, urlImage } from '../donnees/ign';
 
 export interface Acces {
@@ -204,7 +204,8 @@ export async function chargerScene(
   else avertissements.push('La carte de classification LiDAR est indisponible : les arbres ne sont pas distingués des bâtiments et comptent comme des obstacles opaques. Relancez la recherche pour réessayer.');
   progression('Séparation des arbres et des bâtiments…');
   const s0 = construireSurfaces(mns0, mnt0, classes0);
-  const niveaux: Niveau[] = [{ dur: s0.dur, arbres: classes0 ? s0.arbres : null }];
+  // Base des houppiers : le soleil (et la vue 3D) passe sous les branches des arbres proches.
+  const niveaux: Niveau[] = [{ dur: s0.dur, arbres: classes0 ? s0.arbres : null, bases: classes0 ? basesHouppiers(s0.arbres, s0.dur) : null }];
   let inventaire: InfoInventaire | null = null;
   if (source && classes0) {
     const recenses = await pInventaire;

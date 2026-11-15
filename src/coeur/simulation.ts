@@ -4,6 +4,7 @@
 import { type TableSolaire, dateDuJour } from './soleil';
 import { type GeometrieFenetre, type RectangleEclaire, rectangleEclaire } from './fenetre';
 import { directNormal, TROUBLE_LINKE_DEFAUT } from './cielclair';
+import { type MasqueArbres, cacheParArbres } from './horizon';
 
 const RAD = Math.PI / 180;
 
@@ -38,9 +39,10 @@ export interface Echantillons {
   nk: number;
   /** [ix * nz + iz] → tangentes de l'horizon bâti par azimut. */
   tanDur: Float32Array[];
-  tanArb: Float32Array[];
-  /** Horizon des seuls arbres persistants identifiés par un inventaire (−∞ sans inventaire). */
-  tanPers?: Float32Array[];
+  /** Masque de toute la végétation (sommets, et passage possible sous les houppiers proches). */
+  arbres: MasqueArbres[];
+  /** Masque des seuls arbres persistants identifiés par un inventaire (vide sans inventaire). */
+  persistants?: MasqueArbres[];
 }
 
 export interface ParametresSimulation {
@@ -139,7 +141,7 @@ export function simuler(p: ParametresSimulation): ResultatSimulation {
   let energieRef = 0;
   let joursSans = 0;
   const centre = Math.floor(nx / 2) * nz + Math.floor(nz / 2);
-  const tanPers = p.persistantsConnus && p.arbres === ModeArbres.Feuillus && ech.tanPers ? ech.tanPers : null;
+  const pers = p.persistantsConnus && p.arbres === ModeArbres.Feuillus && ech.persistants ? ech.persistants : null;
 
   for (let j = 0; j < jours; j++) {
     const c0 = table.lever[j];
@@ -189,7 +191,7 @@ export function simuler(p: ParametresSimulation): ResultatSimulation {
       if (!okRef || !rectangleEclaire(fenetre, tanG, tanProfil, true, true, rect)) {
         // Vitrage entièrement dans l'ombre de la baie : on signale d'abord un éventuel obstacle extérieur.
         if (etats) {
-          etats[i] = tanEl <= ech.tanDur[centre][jk] ? Etat.OmbreBati : tau < 1 && tanEl <= ech.tanArb[centre][jk] ? Etat.OmbreArbre : Etat.OmbrePropre;
+          etats[i] = tanEl <= ech.tanDur[centre][jk] ? Etat.OmbreBati : tau < 1 && cacheParArbres(ech.arbres[centre], jk, tanEl) ? Etat.OmbreArbre : Etat.OmbrePropre;
         }
         continue;
       }
@@ -215,9 +217,9 @@ export function simuler(p: ParametresSimulation): ResultatSimulation {
           const s = ix * nz + iz;
           if (tanEl > ech.tanDur[s][jk]) {
             fDur += w;
-            if (tanEl > ech.tanArb[s][jk]) f += w;
+            if (!cacheParArbres(ech.arbres[s], jk, tanEl)) f += w;
             // Derrière un arbre : la lumière ne filtre (hors saison) que si ce n'est pas un persistant.
-            else if (tau > 0 && (!tanPers || tanEl > tanPers[s][jk])) f += w * tau;
+            else if (tau > 0 && (!pers || !cacheParArbres(pers[s], jk, tanEl))) f += w * tau;
           }
         }
       }
@@ -321,7 +323,7 @@ export function cielVisibleEtHorizon(p: Pick<ParametresSimulation, 'echantillons
           const zHaut = (iz + 0.5) / nz;
           if (zHaut > rect.zb) continue;
           const s = ix * nz + iz;
-          if (tanEl > ech.tanDur[s][jk] && (p.arbres === ModeArbres.Ignores || tanEl > ech.tanArb[s][jk])) v++;
+          if (tanEl > ech.tanDur[s][jk] && (p.arbres === ModeArbres.Ignores || !cacheParArbres(ech.arbres[s], jk, tanEl))) v++;
         }
       }
       visible += (w * v) / (nx * nz);

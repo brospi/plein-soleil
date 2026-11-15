@@ -8,12 +8,20 @@
  * enveloppe suffit pour retrouver l'angle d'horizon depuis n'importe quelle
  * hauteur d'observation sur la même verticale : changer d'étage ne relance
  * donc aucun rayon.
+ *
+ * Arbres : à moins de `DISTANCE_HOUPPIERS`, un houppier dont la base est
+ * connue laisse passer le soleil en dessous. On garde alors, en plus du
+ * sommet, l'enveloppe convexe *inférieure* des bases : l'angle le plus bas
+ * sous lequel commence un houppier proche. Entre cet angle et le sommet de la
+ * végétation qui touche le sol (ou lointaine), le soleil passe sous les arbres.
  */
 import { type Raster } from './raster';
 
 const RAD = Math.PI / 180;
 /** Courbure terrestre et réfraction (k = 0,13) : abaissement apparent en m par m² de distance. */
 const COURBURE = (1 - 0.13) / (2 * 6_371_000);
+/** Distance (m) jusqu'à laquelle on tient compte du vide sous les houppiers ; au-delà, il ne passe plus qu'un soleil rasant. */
+export const DISTANCE_HOUPPIERS = 60;
 
 export interface Niveau {
   dur: Raster;
@@ -21,6 +29,21 @@ export interface Niveau {
   arbres: Raster | null;
   /** Sommet des seuls arbres à feuillage persistant, quand un inventaire les identifie. */
   persistants?: Raster | null;
+  /** Base des houppiers (SANS_DONNEE : végétation jusqu'au sol). */
+  bases?: Raster | null;
+}
+
+/** Enveloppes d'une catégorie de végétation, pour l'azimut k : points [off[k], off[k+1][ (paires distance, altitude). */
+export interface EnveloppesArbres {
+  /** Sommets de la végétation qui descend jusqu'au sol, ou lointaine. */
+  offBas: Int32Array;
+  bas: Float32Array;
+  /** Sommets des houppiers proches à base connue. */
+  offHaut: Int32Array;
+  haut: Float32Array;
+  /** Bases de ces houppiers, altitudes changées de signe (enveloppe inférieure). */
+  offBase: Int32Array;
+  base: Float32Array;
 }
 
 export interface Faisceau {
@@ -33,11 +56,10 @@ export interface Faisceau {
   /** Enveloppes : pour l'azimut k, points [offDur[k], offDur[k+1][ de `dur` (paires distance, altitude). */
   offDur: Int32Array;
   dur: Float32Array;
-  offArb: Int32Array;
-  arb: Float32Array;
-  /** Enveloppes des arbres persistants (vides sans inventaire). */
-  offPers: Int32Array;
-  pers: Float32Array;
+  /** Toute la végétation. */
+  arbres: EnveloppesArbres;
+  /** Arbres persistants (vides sans inventaire). */
+  persistants: EnveloppesArbres;
 }
 
 export interface OptionsFaisceau {
@@ -70,6 +92,61 @@ class Enveloppe {
   }
 }
 
+const SANS_BASE = -1e9;
+
+/** Enveloppes d'une catégorie de végétation le long d'un rayon. */
+class CollecteArbres {
+  bas = new Enveloppe();
+  haut = new Enveloppe();
+  base = new Enveloppe();
+  vider(): void {
+    this.bas.vider();
+    this.haut.vider();
+    this.base.vider();
+  }
+  ajouter(t: number, sommet: number, base: number): void {
+    if (base > -1000) {
+      this.haut.ajouter(t, sommet);
+      this.base.ajouter(t, -base);
+    } else this.bas.ajouter(t, sommet);
+  }
+}
+
+class PointsArbres {
+  bas: number[] = [];
+  haut: number[] = [];
+  base: number[] = [];
+  offBas: Int32Array;
+  offHaut: Int32Array;
+  offBase: Int32Array;
+  constructor(nk: number) {
+    this.offBas = new Int32Array(nk + 1);
+    this.offHaut = new Int32Array(nk + 1);
+    this.offBase = new Int32Array(nk + 1);
+  }
+  ajouter(j: number, c: CollecteArbres): void {
+    const copier = (e: Enveloppe, v: number[]): void => {
+      for (let i = 0; i < e.n; i++) v.push(e.d[i], e.h[i]);
+    };
+    copier(c.bas, this.bas);
+    copier(c.haut, this.haut);
+    copier(c.base, this.base);
+    this.offBas[j + 1] = this.bas.length;
+    this.offHaut[j + 1] = this.haut.length;
+    this.offBase[j + 1] = this.base.length;
+  }
+  fin(): EnveloppesArbres {
+    return {
+      offBas: this.offBas,
+      bas: Float32Array.from(this.bas),
+      offHaut: this.offHaut,
+      haut: Float32Array.from(this.haut),
+      offBase: this.offBase,
+      base: Float32Array.from(this.base),
+    };
+  }
+}
+
 /**
  * Parcourt les cellules de `r` traversées par le rayon entre les distances
  * t0 et t1. Renvoie la distance de sortie du raster (ou t1).
@@ -85,11 +162,13 @@ function parcourir(
   t1: number,
   sauterPremiere: boolean,
   env: Enveloppe,
-  envArb: Enveloppe | null,
-  arbres: Raster | null,
-  envPers: Enveloppe | null = null,
-  persistants: Raster | null = null,
+  niveau: Niveau,
+  envArb: CollecteArbres,
+  envPers: CollecteArbres,
 ): number {
+  const arbres = niveau.arbres;
+  const persistants = niveau.persistants ?? null;
+  const bases = niveau.bases ?? null;
   const inv = 1 / r.pas;
   const gx = (ox + dx * t0 - r.x0) * inv;
   const gy = (r.y1 - (oy + dy * t0)) * inv;
@@ -109,18 +188,21 @@ function parcourir(
   const d = r.d;
   const da = arbres ? arbres.d : null;
   const dp = persistants ? persistants.d : null;
+  const db = bases ? bases.d : null;
   for (;;) {
     if (!premiere && t > 1e-3) {
       const i = cy * L + cx;
       const chute = t * t * COURBURE;
       env.ajouter(t, d[i] - chute);
-      if (da && envArb) {
+      // Base du houppier, si elle est connue et assez proche pour compter.
+      const b = db && t <= DISTANCE_HOUPPIERS ? db[i] : SANS_BASE;
+      if (da) {
         const a = da[i];
-        if (a > -1000) envArb.ajouter(t, a - chute);
+        if (a > -1000) envArb.ajouter(t, a - chute, b - chute);
       }
-      if (dp && envPers) {
+      if (dp) {
         const a = dp[i];
-        if (a > -1000) envPers.ajouter(t, a - chute);
+        if (a > -1000) envPers.ajouter(t, a - chute, b - chute);
       }
     }
     premiere = false;
@@ -161,14 +243,12 @@ export function calculerFaisceau(
     nk = Math.floor((2 * demi) / pasAz) + 1;
   }
   const offDur = new Int32Array(nk + 1);
-  const offArb = new Int32Array(nk + 1);
-  const offPers = new Int32Array(nk + 1);
   const ptsDur: number[] = [];
-  const ptsArb: number[] = [];
-  const ptsPers: number[] = [];
+  const ptsArb = new PointsArbres(nk);
+  const ptsPers = new PointsArbres(nk);
   const env = new Enveloppe();
-  const envArb = new Enveloppe();
-  const envPers = new Enveloppe();
+  const envArb = new CollecteArbres();
+  const envPers = new CollecteArbres();
   for (let j = 0; j < nk; j++) {
     const az = ((k0 + j) % nAz) * pasAz * RAD;
     const dx = Math.sin(az);
@@ -179,16 +259,14 @@ export function calculerFaisceau(
     let t = 0;
     for (let n = 0; n < niveaux.length && t < distanceMax; n++) {
       const niv = niveaux[n];
-      t = parcourir(niv.dur, ox, oy, dx, dy, t, distanceMax, n === 0, env, envArb, niv.arbres, envPers, niv.persistants ?? null);
+      t = parcourir(niv.dur, ox, oy, dx, dy, t, distanceMax, n === 0, env, niv, envArb, envPers);
     }
     for (let i = 0; i < env.n; i++) ptsDur.push(env.d[i], env.h[i]);
-    for (let i = 0; i < envArb.n; i++) ptsArb.push(envArb.d[i], envArb.h[i]);
-    for (let i = 0; i < envPers.n; i++) ptsPers.push(envPers.d[i], envPers.h[i]);
     offDur[j + 1] = ptsDur.length;
-    offArb[j + 1] = ptsArb.length;
-    offPers[j + 1] = ptsPers.length;
+    ptsArb.ajouter(j, envArb);
+    ptsPers.ajouter(j, envPers);
   }
-  return { pasAz, nAz, k0, nk, offDur, dur: Float32Array.from(ptsDur), offArb, arb: Float32Array.from(ptsArb), offPers, pers: Float32Array.from(ptsPers) };
+  return { pasAz, nAz, k0, nk, offDur, dur: Float32Array.from(ptsDur), arbres: ptsArb.fin(), persistants: ptsPers.fin() };
 }
 
 /** Tangente de l'angle d'horizon maximal d'une enveloppe vue depuis l'altitude z. */
@@ -202,14 +280,46 @@ function tangenteMax(pts: Float32Array, debut: number, fin: number, z: number): 
 }
 
 /**
- * Remplit, pour une altitude d'observation z, la tangente de l'angle
- * d'horizon de chaque azimut calculé (bâti dans `tanDur`, arbres dans `tanArb`).
+ * Masque d'une catégorie d'arbres pour un azimut : le soleil de tangente t
+ * est caché si t ≤ `bas`, ou si `houppier` ≤ t ≤ `sommet` (entre les deux, il
+ * passe sous les houppiers proches).
  */
-export function horizonPourAltitude(f: Faisceau, z: number, tanDur: Float32Array, tanArb: Float32Array, tanPers?: Float32Array): void {
+export interface MasqueArbres {
+  /** Sommet de toute la végétation. */
+  sommet: Float32Array;
+  /** Sommet de la végétation qui descend jusqu'au sol, ou lointaine. */
+  bas: Float32Array;
+  /** Angle le plus bas où commence un houppier proche (+∞ s'il n'y en a pas). */
+  houppier: Float32Array;
+}
+
+export function creerMasque(nk: number): MasqueArbres {
+  return { sommet: new Float32Array(nk), bas: new Float32Array(nk), houppier: new Float32Array(nk) };
+}
+
+/** Vrai si un soleil de tangente t est caché par cette catégorie d'arbres. */
+export function cacheParArbres(m: MasqueArbres, j: number, t: number): boolean {
+  return t <= m.bas[j] || (t >= m.houppier[j] && t <= m.sommet[j]);
+}
+
+function remplirMasque(e: EnveloppesArbres, j: number, z: number, m: MasqueArbres): void {
+  const bas = tangenteMax(e.bas, e.offBas[j], e.offBas[j + 1], z);
+  const haut = tangenteMax(e.haut, e.offHaut[j], e.offHaut[j + 1], z);
+  m.bas[j] = bas;
+  m.sommet[j] = Math.max(bas, haut);
+  // min des pentes vers les bases = −max des pentes vers les bases changées de signe.
+  m.houppier[j] = -tangenteMax(e.base, e.offBase[j], e.offBase[j + 1], -z);
+}
+
+/**
+ * Remplit, pour une altitude d'observation z, la tangente de l'angle
+ * d'horizon bâti de chaque azimut calculé, et les masques des arbres.
+ */
+export function horizonPourAltitude(f: Faisceau, z: number, tanDur: Float32Array, arbres: MasqueArbres, persistants?: MasqueArbres): void {
   for (let j = 0; j < f.nk; j++) {
     tanDur[j] = tangenteMax(f.dur, f.offDur[j], f.offDur[j + 1], z);
-    tanArb[j] = tangenteMax(f.arb, f.offArb[j], f.offArb[j + 1], z);
-    if (tanPers) tanPers[j] = tangenteMax(f.pers, f.offPers[j], f.offPers[j + 1], z);
+    remplirMasque(f.arbres, j, z, arbres);
+    if (persistants) remplirMasque(f.persistants, j, z, persistants);
   }
 }
 

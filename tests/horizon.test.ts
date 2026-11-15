@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { calculerFaisceau, horizonPourAltitude, indiceAzimut } from '../src/coeur/horizon';
+import { cacheParArbres, calculerFaisceau, creerMasque, horizonPourAltitude, indiceAzimut } from '../src/coeur/horizon';
 import { creerRaster } from '../src/coeur/raster';
 import { boite, scene, X0, Y0, SOL } from './scenes';
 
@@ -11,7 +11,7 @@ describe('lancer de rayons', () => {
     const { scene: s } = scene([boite('mur', -100, -50, 200, 20, 20)]);
     const f = calculerFaisceau(s.niveaux, X0 + 0.25, Y0 + 0.25, 180);
     const d = new Float32Array(f.nk);
-    const a = new Float32Array(f.nk);
+    const a = creerMasque(f.nk);
     for (const z of [SOL, SOL + 10, SOL + 19]) {
       horizonPourAltitude(f, z, d, a);
       const plein = indiceAzimut(f, 180);
@@ -26,7 +26,8 @@ describe('lancer de rayons', () => {
     horizonPourAltitude(f, SOL + 25, d, a);
     expect(d[indiceAzimut(f, 180)]).toBeLessThan(0);
     // Aucun arbre dans la scène.
-    expect(a[indiceAzimut(f, 180)]).toBe(-Infinity);
+    expect(a.sommet[indiceAzimut(f, 180)]).toBe(-Infinity);
+    expect(a.houppier[indiceAzimut(f, 180)]).toBe(Infinity);
   });
 
   it('l’enveloppe convexe donne le même horizon qu’un balayage exhaustif', () => {
@@ -45,7 +46,7 @@ describe('lancer de rayons', () => {
     const oy = Y0 + 0.21;
     const f = calculerFaisceau([{ dur: r, arbres: null }], ox, oy, 0, { demiOuverture: 180, pasAz: 1 });
     const d = new Float32Array(f.nk);
-    const a = new Float32Array(f.nk);
+    const a = creerMasque(f.nk);
     const co = Math.floor((ox - r.x0) / 0.5);
     const lo = Math.floor((r.y1 - oy) / 0.5);
     for (let k = 0; k < f.nk; k += 9) {
@@ -84,8 +85,49 @@ describe('lancer de rayons', () => {
     for (let l = 0; l < 500; l++) for (let c = 0; c < 500; c++) if (l < 125) grossier.d[l * 500 + c] = 100;
     const f = calculerFaisceau([{ dur: fin, arbres: null }, { dur: grossier, arbres: null }], X0, Y0, 0);
     const d = new Float32Array(f.nk);
-    horizonPourAltitude(f, 0, d, new Float32Array(f.nk));
+    horizonPourAltitude(f, 0, d, creerMasque(f.nk));
     const angle = Math.atan(d[indiceAzimut(f, 0)]) * DEG;
     expect(Math.abs(angle - Math.atan(100 / 1000) * DEG)).toBeLessThan(0.1);
+  });
+
+  it('houppier proche : le soleil passe sous les branches, pas à travers', () => {
+    // Sol plat ; un arbre de 18 m dont le houppier commence à 6 m, de 10 à 14 m au sud.
+    const sol = creerRaster(X0 - 100, Y0 + 100, 0.5, 400, 400, 0);
+    const arbres = creerRaster(X0 - 100, Y0 + 100, 0.5, 400, 400, -9999);
+    const bases = creerRaster(X0 - 100, Y0 + 100, 0.5, 400, 400, -9999);
+    // Haie de 3 m pleine jusqu'au sol, à 70 m au sud (au-delà, tout compte jusqu'au sol).
+    for (let l = 0; l < 400; l++) {
+      for (let c = 0; c < 400; c++) {
+        const x = sol.x0 + (c + 0.5) * 0.5 - X0;
+        const y = sol.y1 - (l + 0.5) * 0.5 - Y0;
+        if (Math.abs(x) < 20 && y < -10 && y > -14) {
+          arbres.d[l * 400 + c] = 18;
+          bases.d[l * 400 + c] = 6;
+        }
+        if (Math.abs(x) < 20 && y < -70 && y > -72) arbres.d[l * 400 + c] = 3;
+      }
+    }
+    const f = calculerFaisceau([{ dur: sol, arbres, bases }], X0, Y0, 180, { pasAz: 1 });
+    const d = new Float32Array(f.nk);
+    const m = creerMasque(f.nk);
+    horizonPourAltitude(f, 2, d, m);
+    const j = indiceAzimut(f, 180);
+    // Le houppier commence vu sous atan(4 / 14) et finit sous atan(16 / 10) ; la haie culmine sous atan(1 / 70).
+    // (à une cellule près : la dernière rangée est atteinte à 13,5 m.)
+    expect(Math.abs(m.houppier[j] - 4 / 14)).toBeLessThan(0.02);
+    expect(Math.abs(m.sommet[j] - 16 / 10)).toBeLessThan(0.02);
+    expect(Math.abs(m.bas[j] - 1 / 70)).toBeLessThan(0.002);
+    expect(cacheParArbres(m, j, 0.01)).toBe(true); // derrière la haie
+    expect(cacheParArbres(m, j, 0.15)).toBe(false); // sous les branches
+    expect(cacheParArbres(m, j, 0.8)).toBe(true); // dans le houppier
+    expect(cacheParArbres(m, j, 2)).toBe(false); // au-dessus
+    // Vu d'un étage au-dessus de la base du houppier, plus de passage dessous.
+    horizonPourAltitude(f, 8, d, m);
+    expect(cacheParArbres(m, j, 0.05)).toBe(true);
+    expect(m.houppier[j]).toBeLessThan(m.bas[j]);
+    // Sans base connue, l'arbre est plein jusqu'au sol, comme avant.
+    const plein = calculerFaisceau([{ dur: sol, arbres }], X0, Y0, 180, { pasAz: 1 });
+    horizonPourAltitude(plein, 2, d, m);
+    expect(cacheParArbres(m, j, 0.15)).toBe(true);
   });
 });

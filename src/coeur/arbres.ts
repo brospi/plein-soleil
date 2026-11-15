@@ -126,3 +126,70 @@ export function marquerPersistants(arbres: Raster, inventaire: ArbreRecense[]): 
     bilan: { recenses, persistants: nbPersistants, partIdentifiee: canopee ? identifiee / canopee : 0, partPersistante: canopee ? persistante / canopee : 0 },
   };
 }
+
+/* ---------- Base des houppiers ---------- */
+
+/**
+ * Le LiDAR ne voit que le dessus des arbres. On suppose que le houppier d'un
+ * arbre d'au moins `HAUTEUR_MIN_FUT` mètres commence au tiers de sa hauteur :
+ * en dessous, le tronc laisse passer la lumière (et la vue).
+ */
+export const FRACTION_FUT = 1 / 3;
+/** Hauteur (m) en dessous de laquelle la végétation reste un massif plein (haies, arbustes). */
+export const HAUTEUR_MIN_FUT = 5;
+/** Rayon (m) sur lequel on cherche le sommet de l'arbre auquel appartient une cellule. */
+const RAYON_SOMMET = 3;
+/** Épaisseur minimale (m) d'un houppier, et vide minimal (m) sous lui pour qu'il compte. */
+const EPAISSEUR_MIN = 0.5;
+const VIDE_MIN = 1.5;
+
+/**
+ * Altitude de la base du houppier de chaque cellule de canopée, ou SANS_DONNEE
+ * si la végétation descend jusqu'au sol (arbuste, haie, arbre trop bas).
+ *
+ * La hauteur de l'arbre est celle du point le plus haut à moins de 3 m : les
+ * bords d'un houppier, plus bas que son sommet, ont la même base que lui. Un
+ * bord qui ne dépasse pas cette base d'au moins 50 cm (branches retombantes)
+ * reçoit une base égale à son sommet : épaisseur nulle, il ne cache rien.
+ *
+ * @param arbres sommet de la végétation (SANS_DONNEE ailleurs)
+ * @param sol altitude du sol sur la même grille (surface « dure » sous les arbres)
+ */
+export function basesHouppiers(arbres: Raster, sol: Raster): Raster {
+  const { largeur: L, hauteur: H, pas } = arbres;
+  const n = L * H;
+  const haut = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const a = arbres.d[i];
+    haut[i] = a > -1000 ? Math.max(0, a - sol.d[i]) : 0;
+  }
+  // Maximum glissant séparable (carré de côté 2r + 1).
+  const r = Math.max(1, Math.round(RAYON_SOMMET / pas));
+  const tmp = new Float32Array(n);
+  const loc = new Float32Array(n);
+  for (let l = 0; l < H; l++) {
+    const o = l * L;
+    for (let c = 0; c < L; c++) {
+      let m = 0;
+      for (let d = Math.max(0, c - r); d <= Math.min(L - 1, c + r); d++) if (haut[o + d] > m) m = haut[o + d];
+      tmp[o + c] = m;
+    }
+  }
+  for (let c = 0; c < L; c++) {
+    for (let l = 0; l < H; l++) {
+      let m = 0;
+      for (let d = Math.max(0, l - r); d <= Math.min(H - 1, l + r); d++) if (tmp[d * L + c] > m) m = tmp[d * L + c];
+      loc[l * L + c] = m;
+    }
+  }
+  const bases = creerRaster(arbres.x0, arbres.y1, pas, L, H, SANS_DONNEE);
+  for (let i = 0; i < n; i++) {
+    const a = arbres.d[i];
+    if (!(a > -1000) || loc[i] < HAUTEUR_MIN_FUT) continue;
+    const s = sol.d[i];
+    const base = s + loc[i] * FRACTION_FUT;
+    if (base - s < VIDE_MIN) continue;
+    bases.d[i] = a - base < EPAISSEUR_MIN ? a : base;
+  }
+  return bases;
+}

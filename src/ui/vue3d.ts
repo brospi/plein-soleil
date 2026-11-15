@@ -171,6 +171,15 @@ export class Vue3D {
     this.commandes.enableDamping = this.inertie;
   }
 
+  /** Place la caméra et le point visé (repère de la vue : x est, y haut, z sud ; diagnostic et captures). */
+  placerCamera(camera: { x: number; y: number; z: number }, cible: { x: number; y: number; z: number }): void {
+    if (this.vueFenetre) this.basculerVueFenetre(false);
+    this.camera.position.set(camera.x, camera.y, camera.z);
+    this.commandes.target.set(cible.x, cible.y, cible.z);
+    this.arreterInertie();
+    this.demanderRendu();
+  }
+
   /** Active ou coupe l'élan après un glissement (coupé dans les tests, où le rendu logiciel est lent). */
   definirInertie(active: boolean): void {
     this.inertie = active;

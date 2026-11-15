@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { estPersistant, marquerPersistants } from '../src/coeur/arbres';
+import { basesHouppiers, estPersistant, marquerPersistants } from '../src/coeur/arbres';
 import { creerRaster, SANS_DONNEE } from '../src/coeur/raster';
 import { LYON, PARIS, sourceInventaire } from '../src/donnees/inventaire';
 import { versLambert93 } from '../src/coeur/lambert93';
@@ -153,5 +153,59 @@ describe('effet sur l’ensoleillement', () => {
     const sans = calc.calculer(f, { ...REGLAGES_DEFAUT, arbres: ModeArbres.Feuillus, inventaireArbres: false }).detail!;
     expect(avec.indicateurs.heuresAn).toBe(sans.indicateurs.heuresAn);
     expect(avec.indicateurs.energieAn).toBe(sans.indicateurs.energieAn);
+  });
+});
+
+describe('base des houppiers', () => {
+  it('un tiers de la hauteur de l’arbre, les arbustes restent pleins', () => {
+    const sol = creerRaster(0, 40, 0.5, 80, 80, 30);
+    const arbres = creerRaster(0, 40, 0.5, 80, 80, SANS_DONNEE);
+    const cellule = (x: number, y: number): number => Math.floor((40 - y) / 0.5) * 80 + Math.floor(x / 0.5);
+    for (let l = 0; l < 80; l++) {
+      for (let c = 0; c < 80; c++) {
+        const x = (c + 0.5) * 0.5;
+        const y = 40 - (l + 0.5) * 0.5;
+        // Arbre de 18 m centré en (10, 10), houppier de 4 m de rayon, bords à 8 m.
+        const d = Math.hypot(x - 10, y - 10);
+        if (d < 4) arbres.d[l * 80 + c] = 30 + (d < 2 ? 18 : d < 3 ? 8 : 6.2);
+        // Haie de 3 m le long de y = 30.
+        if (Math.abs(y - 30) < 0.6 && x < 20) arbres.d[l * 80 + c] = 33;
+      }
+    }
+    const b = basesHouppiers(arbres, sol);
+    expect(b.d[cellule(10, 10)]).toBeCloseTo(36, 5); // 30 + 18 / 3
+    // Le bord, plus bas que le sommet, garde la base de l'arbre.
+    expect(b.d[cellule(10, 12.5)]).toBeCloseTo(36, 5);
+    // Branches retombantes sous la base : épaisseur nulle, rien n'est caché.
+    expect(b.d[cellule(10, 13.6)]).toBeCloseTo(36.2, 4);
+    expect(b.d[cellule(5, 30)]).toBe(SANS_DONNEE); // haie
+    expect(b.d[cellule(30, 30)]).toBe(SANS_DONNEE); // pas de végétation
+  });
+
+  it('effet : plus de soleil sous les branches pour les étages bas, rien de changé au-dessus', () => {
+    // Rangée d'arbres de 15 m, 8 à 14 m devant une façade sud, sur 60 m de long.
+    const s = scene([boite('a', -30, 0, 60, 12, 24)]);
+    const { arbres } = s;
+    for (let l = 0; l < arbres.hauteur; l++) {
+      const y = arbres.y1 - (l + 0.5) * 0.5;
+      if (y < Y0 - 8 && y > Y0 - 14) {
+        for (let c = 0; c < arbres.largeur; c++) {
+          const x = arbres.x0 + (c + 0.5) * 0.5;
+          if (Math.abs(x - X0) < 30) arbres.d[l * arbres.largeur + c] = SOL + 15;
+        }
+      }
+    }
+    const bases = basesHouppiers(arbres, s.dur);
+    const plein = new Calculateur(s.scene);
+    const creux = new Calculateur({ ...s.scene, niveaux: [{ ...s.scene.niveaux[0], bases }] });
+    const reglages = { ...REGLAGES_DEFAUT, arbres: ModeArbres.Persistants };
+    const spec = (etage: number): SpecFenetre => ({ x: X0, y: Y0, nx: 0, ny: -1, etage, hauteurLibre: null, geometrie: { largeur: 1.2, hauteur: 1.6, embrasure: 0, balcon: null } });
+    const rdcPlein = plein.calculer(spec(0), reglages).detail!.indicateurs.heuresAn;
+    const rdcCreux = creux.calculer(spec(0), reglages).detail!.indicateurs.heuresAn;
+    // Au rez-de-chaussée, le soleil bas passe sous les houppiers (base à 5 m).
+    expect(rdcCreux).toBeGreaterThan(rdcPlein + 50);
+    // Au 2e étage (vers 7,5 m), l'œil est au-dessus de la base : rien ne change.
+    const haut = (c: Calculateur) => c.calculer(spec(2), reglages).detail!.indicateurs.heuresAn;
+    expect(Math.abs(haut(creux) - haut(plein))).toBeLessThan(1);
   });
 });

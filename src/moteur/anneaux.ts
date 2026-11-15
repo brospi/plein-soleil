@@ -5,7 +5,7 @@
  */
 import { type Raster } from '../coeur/raster';
 import { Classe } from '../coeur/classification';
-import { type Maillage, lisserRelief, maillerRelief } from '../coeur/maillage';
+import { type Maillage, fusionnerMaillages, lisserRelief, maillerHouppiers, maillerRelief } from '../coeur/maillage';
 import { type Niveau } from '../coeur/horizon';
 
 export interface DefinitionAnneau {
@@ -103,6 +103,11 @@ interface Grille {
   /** Centre de la cellule (0, 0) dans le repère de la vue (x est, z sud). */
   ox: number;
   oz: number;
+  /**
+   * Houppiers à base connue (grille fine seulement) : dessus et dessous, NaN
+   * ailleurs ; `h` donne alors le sol sous eux.
+   */
+  houppiers: { haut: Float32Array; base: Float32Array; classes: Uint8Array } | null;
 }
 
 /**
@@ -120,6 +125,8 @@ export function extraireGrille(
   const dur = niveau.dur;
   const arbres = niveau.arbres;
   const persistants = niveau.persistants ?? null;
+  // Houppiers posés sur des troncs : seulement à la résolution native.
+  const bases = facteur === 1 ? (niveau.bases ?? null) : null;
   const pasFin = dur.pas;
   const pas = pasFin * facteur;
   // Calage sur la grille grossière pour que les cellules regroupées soient alignées.
@@ -131,6 +138,8 @@ export function extraireGrille(
   const hauteur = Math.max(0, Math.floor((l1 - l0) / facteur));
   const h = new Float32Array(largeur * hauteur);
   const cl = new Uint8Array(largeur * hauteur);
+  const n = largeur * hauteur;
+  const houppiers = bases ? { haut: new Float32Array(n).fill(NaN), base: new Float32Array(n).fill(NaN), classes: new Uint8Array(n) } : null;
   for (let l = 0; l < hauteur; l++) {
     for (let c = 0; c < largeur; c++) {
       let haut = -Infinity;
@@ -141,7 +150,18 @@ export function extraireGrille(
           const a = arbres ? arbres.d[i] : -9999;
           let z: number;
           let k: number;
-          if (a > -1000) {
+          if (houppiers && a > -1000 && bases!.d[i] > -1000) {
+            // Houppier en l'air (facteur 1 : une seule cellule) : le relief garde le sol dessous.
+            // Un bord d'épaisseur nulle (sous la base de son arbre) n'est pas dessiné.
+            const o = l * largeur + c;
+            if (a - bases!.d[i] > 0.05) {
+              houppiers.haut[o] = a;
+              houppiers.base[o] = bases!.d[i];
+              houppiers.classes[o] = persistants && persistants.d[i] > -1000 ? Classe.VegetationPersistante : Classe.Vegetation;
+            }
+            z = Math.max(dur.d[i], -100);
+            k = Classe.Sol;
+          } else if (a > -1000) {
             z = a;
             k = persistants && persistants.d[i] > -1000 ? Classe.VegetationPersistante : Classe.Vegetation;
           } else {
@@ -167,6 +187,7 @@ export function extraireGrille(
     pas,
     ox: dur.x0 + c0 * pasFin + pas / 2 - x,
     oz: y - (dur.y1 - l0 * pasFin - pas / 2),
+    houppiers,
   };
 }
 
@@ -227,7 +248,12 @@ export function maillerAnneaux(
       };
     }
     const h = d.niveau === 0 && d.facteur === 1 ? lisserRelief(g.h, g.largeur, g.hauteur) : g.h;
-    const maillage = maillerRelief(h, g.cl, g.largeur, g.hauteur, g.pas, { seuil: d.seuil, ox: g.ox, oz: g.oz, z0, exclure });
+    let maillage = maillerRelief(h, g.cl, g.largeur, g.hauteur, g.pas, { seuil: d.seuil, ox: g.ox, oz: g.oz, z0, exclure });
+    if (g.houppiers) {
+      // Houppiers en l'air et troncs, dans le même maillage que le relief.
+      const hp = g.houppiers;
+      maillage = fusionnerMaillages(maillage, maillerHouppiers(hp.haut, hp.base, h, hp.classes, g.largeur, g.hauteur, g.pas, { ox: g.ox, oz: g.oz, z0 }));
+    }
     resultat.push({ maillage, pas: g.pas, rayon: d.rayon });
     // Zone couverte (centres des cellules extrêmes), réduite d'une demi-cellule pour éviter les trous.
     const zone = { xMin: g.ox + g.pas / 2, xMax: g.ox + (g.largeur - 1) * g.pas - g.pas / 2, zMin: g.oz + g.pas / 2, zMax: g.oz + (g.hauteur - 1) * g.pas - g.pas / 2 };

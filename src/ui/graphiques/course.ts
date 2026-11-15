@@ -3,7 +3,7 @@ import { nombre, orientation } from '../outils';
 import { positionSoleil, utcDepuisHeureLegale, ANNEE_TYPE } from '../../coeur/soleil';
 
 export interface DonneesCourse {
-  horizon: { k0: number; nk: number; pasAz: number; bati: Float32Array; arbres: Float32Array };
+  horizon: { k0: number; nk: number; pasAz: number; bati: Float32Array; arbres: Float32Array; arbresBas?: Float32Array; houppiers?: Float32Array };
   /** Azimut « grille » de la normale et convergence des méridiens (degrés). */
   azNormale: number;
   convergence: number;
@@ -33,7 +33,7 @@ export class GrapheCourse extends Graphe<DonneesCourse> {
   }
 
   /** Hauteur de l'horizon (degrés) pour un azimut géographique ; null si derrière la façade. */
-  private horizonEn(d: DonneesCourse, azimut: number): { bati: number; arbres: number } | null {
+  private horizonEn(d: DonneesCourse, azimut: number): { bati: number; arbres: number; bas: number; houppier: number } | null {
     const h = d.horizon;
     const nAz = Math.round(360 / h.pasAz);
     const k = ((Math.round((azimut - d.convergence) / h.pasAz) % nAz) + nAz) % nAz;
@@ -42,7 +42,16 @@ export class GrapheCourse extends Graphe<DonneesCourse> {
     let rel = azimut - d.convergence - d.azNormale;
     rel -= 360 * Math.round(rel / 360);
     if (Math.abs(rel) > 89.5) return null;
-    return { bati: Math.max(0, h.bati[j]), arbres: Math.max(0, h.arbres[j]) };
+    const arbres = Math.max(0, h.arbres[j]);
+    // Sans houppier proche (ou données d'une version antérieure) : arbres pleins jusqu'au sol.
+    const bas = Math.max(0, h.arbresBas?.[j] ?? h.arbres[j]);
+    const houppier = h.houppiers?.[j] ?? 90;
+    return { bati: Math.max(0, h.bati[j]), arbres, bas, houppier };
+  }
+
+  /** Vrai si un soleil à cette hauteur (degrés) est caché par les arbres. */
+  private sousArbres(hz: { arbres: number; bas: number; houppier: number }, el: number): boolean {
+    return el <= hz.bas || (el >= hz.houppier && el <= hz.arbres);
   }
 
   protected tracer(ctx: CanvasRenderingContext2D, l: number, h: number, t: Theme, d: DonneesCourse): void {
@@ -69,7 +78,10 @@ export class GrapheCourse extends Graphe<DonneesCourse> {
       if (d.arbresComptes && hz.arbres > hz.bati) {
         ctx.fillStyle = t.arbre;
         ctx.globalAlpha = 0.75;
-        ctx.fillRect(x, Y(hz.arbres), pasPx + 0.5, Y(hz.bati) - Y(hz.arbres));
+        // Houppiers proches (au-dessus du vide sous les branches), puis végétation jusqu'au sol.
+        const debut = Math.max(hz.bati, Math.min(hz.houppier, hz.arbres));
+        ctx.fillRect(x, Y(hz.arbres), pasPx + 0.5, Y(debut) - Y(hz.arbres));
+        if (hz.bas > hz.bati) ctx.fillRect(x, Y(Math.min(hz.bas, hz.arbres)), pasPx + 0.5, Y(hz.bati) - Y(Math.min(hz.bas, hz.arbres)));
         ctx.globalAlpha = 1;
       }
       ctx.fillStyle = t.bati;
@@ -122,7 +134,7 @@ export class GrapheCourse extends Graphe<DonneesCourse> {
           continue;
         }
         const hz = this.horizonEn(d, p.azimut);
-        const visible = !!hz && p.hauteur > hz.bati && (!d.arbresComptes || p.hauteur > hz.arbres);
+        const visible = !!hz && p.hauteur > hz.bati && (!d.arbresComptes || !this.sousArbres(hz, p.hauteur));
         const pt = { x: X(p.azimut), y: Y(p.hauteur), visible };
         if (pt.y < sommet.y) sommet = pt;
         if (precedent) {
@@ -182,7 +194,10 @@ export class GrapheCourse extends Graphe<DonneesCourse> {
     const lignes = hz
       ? `<div class="ligne"><span><i style="background:var(--g-bati)"></i>Bâti, relief</span><span>${nombre(hz.bati)}°</span></div>` +
         (hz.arbres > hz.bati ? `<div class="ligne"><span><i style="background:var(--g-arbre)"></i>Arbres</span><span>${nombre(hz.arbres)}°</span></div>` : '') +
-        `<div>${el > Math.max(hz.bati, d.arbresComptes ? hz.arbres : 0) ? 'Ciel dégagé à cette hauteur' : 'Masqué à cette hauteur'}</div>`
+        (hz.arbres > hz.bati && hz.houppier < hz.arbres && hz.houppier > Math.max(hz.bas, hz.bati)
+          ? `<div class="ligne"><span>Sous les branches</span><span>${nombre(Math.max(hz.bas, hz.bati))}° à ${nombre(hz.houppier)}°</span></div>`
+          : '') +
+        `<div>${el > hz.bati && (!d.arbresComptes || !this.sousArbres(hz, el)) ? 'Ciel dégagé à cette hauteur' : 'Masqué à cette hauteur'}</div>`
       : '<div>Direction située derrière la façade</div>';
     return { x, y, html: `<strong>${orientation(az)} (${nombre(az)}°), ${nombre(el)}° de hauteur</strong>${lignes}` };
   }
