@@ -59,6 +59,18 @@ export function urlBatiments(x0: number, y0: number, x1: number, y1: number, deb
   );
 }
 
+/**
+ * Index des dalles LiDAR HD (1 km²) recouvrant une emprise, avec l'adresse
+ * de leur nuage de points COPC. Le fichier lui-même est servi en CORS ouvert
+ * et accepte les lectures par plages d'octets.
+ */
+export function urlDallesNuage(x0: number, y0: number, x1: number, y1: number): string {
+  return (
+    `${WFS}?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=IGNF_LIDAR-HD_METADONNEE:metadata&PROPERTYNAME=url_npl` +
+    `&BBOX=${x0},${y0},${x1},${y1},urn:ogc:def:crs:EPSG::2154&OUTPUTFORMAT=application/json&COUNT=200`
+  );
+}
+
 export function urlTuiles(couche: string, format: 'image/jpeg' | 'image/png'): string {
   return (
     `${WMTS}?SERVICE=WMTS&VERSION=1.0.0&REQUEST=GetTile&LAYER=${couche}&STYLE=normal&TILEMATRIXSET=PM` +

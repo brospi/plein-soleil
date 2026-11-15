@@ -13,6 +13,13 @@ import { COUCHE_ORTHO_WMS, urlImage } from '../donnees/ign';
 import { dateLongue, heureDuJour, parId } from './outils';
 import { AIDE_3D, AIDE_VUE_FENETRE } from './textes';
 import { ETENDUES, ETENDUE_DEFAUT, ETENDUE_MOBILE, etendue } from '../moteur/anneaux';
+import { RAYON_NUAGE_MAX } from '../moteur/nuage';
+import { type EtatNuage, Nuage3D } from './nuage3d';
+
+/** Calque des maillages masqués à l'écran en mode nuage de points : ils projettent encore leurs ombres. */
+const CALQUE_OMBRES = 1;
+const BUDGET_NUAGE = 3_000_000;
+const BUDGET_NUAGE_MOBILE = 1_200_000;
 
 export interface PointMur {
   x: number;
@@ -48,6 +55,48 @@ for (let i = 0; i < 256; i++) {
   LINEAIRE[i] = c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
 }
 
+/** Résumé du nuage pour l'information sous l'étendue : points affichés, avancement, limite. */
+export function texteNuage(e: EtatNuage, avancement: number, rayonTotal: number): string {
+  if (!e.attendus && !e.termine && !e.erreur) return 'Nuage de points : recherche des dalles LiDAR HD…';
+  const millions = (e.points / 1e6).toLocaleString('fr-FR', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  let texte = `${millions} M points`;
+  if (!e.termine && !e.erreur) texte += ` · ${Math.round(avancement * 100)} %`;
+  if (rayonTotal > e.rayon + 1) texte += ` · volumes au-delà de ${(e.rayon / 1000).toLocaleString('fr-FR')} km`;
+  return texte;
+}
+
+/**
+ * Fond du nuage de points, attributs partagés avec le maillage : dessus (toits,
+ * sol, houppiers) en groupe 0, murs en groupe 1. Les flancs des houppiers et
+ * les troncs (verts ou sombres) sont écartés : le nuage montre les arbres.
+ */
+export function geometrieFond(g: THREE.BufferGeometry): THREE.BufferGeometry {
+  const index = g.getIndex()!.array as Uint32Array;
+  const [dessus, groupe] = g.groups;
+  const couleurs = g.getAttribute('color').array as Float32Array;
+  const garde = new Uint32Array(index.length);
+  garde.set(index.subarray(dessus.start, dessus.start + dessus.count));
+  let n = dessus.count;
+  for (let i = groupe?.start ?? 0, fin = groupe ? groupe.start + groupe.count : 0; i < fin; i += 3) {
+    const s = index[i] * 3;
+    const r = couleurs[s];
+    const v = couleurs[s + 1];
+    const b = couleurs[s + 2];
+    // Couleurs linéaires : un mur beige vaut ~1,8, un pont ~0,9, un tronc ~0,24.
+    if (v > r || r + v + b < 0.35) continue;
+    garde[n++] = index[i];
+    garde[n++] = index[i + 1];
+    garde[n++] = index[i + 2];
+  }
+  const murs = new THREE.BufferGeometry();
+  for (const nom of ['position', 'normal', 'color']) murs.setAttribute(nom, g.getAttribute(nom));
+  murs.setIndex(new THREE.BufferAttribute(garde.slice(0, n), 1));
+  murs.addGroup(0, dessus.count, 0);
+  murs.addGroup(dessus.count, n - dessus.count, 1);
+  murs.boundingSphere = g.boundingSphere;
+  return murs;
+}
+
 function melanger(a: number, b: number, t: number): THREE.Color {
   return new THREE.Color(a).lerp(new THREE.Color(b), Math.max(0, Math.min(1, t)));
 }
@@ -67,6 +116,15 @@ export class Vue3D {
   private marqueurs = new THREE.Group();
   private matToits = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0, side: THREE.DoubleSide, shadowSide: THREE.BackSide });
   private matMurs = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0, side: THREE.DoubleSide, shadowSide: THREE.BackSide });
+  /**
+   * Mode nuage : le LiDAR aérien ne voit presque pas les façades. Sans elles,
+   * on verrait à travers les immeubles le vide sous leurs toits ; les murs du
+   * relief maillé restent donc affichés derrière les points (sans les arbres),
+   * et le dessus, assombri, bouche les interstices entre les points.
+   */
+  private murs = new THREE.Group();
+  private matMursNuage = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 2 });
+  private matFondNuage = new THREE.MeshStandardMaterial({ vertexColors: true, color: 0x6a6a6a, roughness: 1, metalness: 0, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 4 });
   private proche: THREE.Mesh | null = null;
   private texture: THREE.Texture | null = null;
   private infos: ResultatMaillage | null = null;
@@ -87,6 +145,9 @@ export class Vue3D {
   private oeil: { position: THREE.Vector3; az: number } | null = null;
   private cap = 0;
   private site = 0;
+  /** Nuage de points LiDAR HD, créé au premier passage dans ce mode. */
+  private nuage: Nuage3D | null = null;
+  private modeNuage = false;
   sceneCourante: InfoScene | null = null;
   surMur: (p: PointMur) => void = () => {};
   /** Texte d'aide correspondant au mode courant. */
@@ -112,6 +173,7 @@ export class Vue3D {
     this.soleil.shadow.bias = -0.0002;
     this.soleil.shadow.normalBias = 0.08;
     this.soleil.shadow.radius = 2.5;
+    this.soleil.shadow.camera.layers.enable(CALQUE_OMBRES);
     let memorisee: string | null = null;
     try {
       memorisee = localStorage.getItem(CLE_ETENDUE);
@@ -123,7 +185,7 @@ export class Vue3D {
     this.scene3.fog = new THREE.Fog(0xbcd9f2, 1000, 2000);
     this.disque.scale.setScalar(this.distanceCiel * Math.tan(1.1 * RAD));
     this.voute.add(this.disque, this.course, this.reperes);
-    this.scene3.add(this.soleil, this.soleil.target, this.ciel, this.maillages, this.marqueurs, this.voute);
+    this.scene3.add(this.soleil, this.soleil.target, this.ciel, this.maillages, this.murs, this.marqueurs, this.voute);
 
     this.commandes = new OrbitControls(this.camera, canvas);
     this.commandes.enableDamping = true;
@@ -206,6 +268,7 @@ export class Vue3D {
       // En vue depuis la fenêtre, la caméra est pilotée directement (regard libre, position fixe).
       if (!this.vueFenetre) this.commandes.update();
       this.majBrume();
+      this.nuage?.majEchelle(this.rendu.domElement.height, this.camera.fov);
       this.rendu.render(this.scene3, this.camera);
       if (this.lecture) this.demanderRendu();
     });
@@ -264,6 +327,11 @@ export class Vue3D {
     const rayon = r.rayon;
     this.sceneCourante = scene;
     this.infos = r;
+    for (const enfant of [...this.murs.children]) {
+      // Attributs partagés avec le maillage, libérés juste après avec lui.
+      (enfant as THREE.Mesh).geometry.dispose();
+      this.murs.remove(enfant);
+    }
     for (const enfant of [...this.maillages.children]) {
       const m = enfant as THREE.Mesh;
       m.geometry.dispose();
@@ -280,6 +348,7 @@ export class Vue3D {
     this.proche = new THREE.Mesh(this.geometrie(fin.maillage, rayon), [this.matToits, this.matMurs]);
     this.proche.castShadow = true;
     this.proche.receiveShadow = true;
+    this.proche.userData.rayon = fin.rayon;
     this.maillages.add(this.proche);
     if (autres.length) {
       // Les anneaux extérieurs gardent leurs couleurs de classe (pas de photo) et ne projettent pas d'ombre.
@@ -287,9 +356,11 @@ export class Vue3D {
       for (const a of autres) {
         const loin = new THREE.Mesh(this.geometrie(a.maillage, null), [matLoin, matLoin]);
         loin.receiveShadow = true;
+        loin.userData.rayon = a.rayon;
         this.maillages.add(loin);
       }
     }
+    this.appliquerModeNuage();
     // Caméra, brume et ciel à la mesure de l'étendue.
     const total = r.rayonTotal;
     this.distanceCiel = Math.max(DISTANCE_CIEL_MIN, total * 1.15);
@@ -297,6 +368,7 @@ export class Vue3D {
     this.camera.far = this.distanceCiel * 1.6;
     this.camera.updateProjectionMatrix();
     this.commandes.maxDistance = Math.max(900, total * 1.4);
+    if (this.modeNuage) this.chargerNuage();
     this.majEtendue();
     // Volume d'ombre : toute la zone proche.
     const cam = this.soleil.shadow.camera;
@@ -401,10 +473,77 @@ export class Vue3D {
   private majEtendue(): void {
     const choix = parId<HTMLSelectElement>('v3-etendue');
     choix.value = this.etendueId;
-    if (this.infos) {
+    const info = parId('v3-etendue-info');
+    if (this.modeNuage && this.nuage) {
+      info.textContent = texteNuage(this.nuage.etat, this.nuage.avancement, this.infos?.rayonTotal ?? 0);
+    } else if (this.infos) {
       const millions = this.infos.triangles / 1e6;
-      parId('v3-etendue-info').textContent = `${millions.toLocaleString('fr-FR', { maximumFractionDigits: 1 })} M triangles`;
+      info.textContent = `${millions.toLocaleString('fr-FR', { maximumFractionDigits: 1 })} M triangles`;
     }
+  }
+
+  /* ---------- Nuage de points LiDAR HD ---------- */
+  /** Rayon couvert par les points : l'étendue choisie, dans la limite du raisonnable à télécharger. */
+  private get rayonNuage(): number {
+    return Math.min(this.infos?.rayonTotal ?? RAYON_NUAGE_MAX, RAYON_NUAGE_MAX);
+  }
+
+  /**
+   * En mode nuage, les maillages couverts par les points passent sur le calque
+   * des ombres : invisibles à l'écran, ils ombrent encore les points et servent
+   * au choix d'une façade. Au-delà du nuage, le relief maillé reste affiché.
+   */
+  private appliquerModeNuage(): void {
+    const limite = this.rayonNuage + 1;
+    for (const enfant of this.maillages.children) {
+      const couvert = this.modeNuage && ((enfant.userData.rayon as number | undefined) ?? Infinity) <= limite;
+      enfant.layers.set(couvert ? CALQUE_OMBRES : 0);
+      if (couvert && !enfant.userData.murs) {
+        const murs = new THREE.Mesh(geometrieFond((enfant as THREE.Mesh).geometry), [this.matFondNuage, this.matMursNuage]);
+        murs.receiveShadow = true;
+        enfant.userData.murs = murs;
+        this.murs.add(murs);
+      }
+      if (enfant.userData.murs) (enfant.userData.murs as THREE.Mesh).visible = couvert;
+    }
+    if (this.nuage) this.nuage.groupe.visible = this.modeNuage;
+    this.demanderRendu();
+  }
+
+  private chargerNuage(): void {
+    if (!this.infos) return;
+    if (!this.nuage) {
+      this.nuage = new Nuage3D(this.mobile ? BUDGET_NUAGE_MOBILE : BUDGET_NUAGE);
+      this.nuage.surChange = () => this.nuageChange();      this.scene3.add(this.nuage.groupe);
+      this.appliquerTexture(this.matToits.map !== null);
+    }
+    this.nuage.charger(this.infos.x, this.infos.y, this.infos.z0, this.rayonNuage);
+  }
+
+  private nuageChange(): void {
+    const n = this.nuage;
+    if (!n) return;
+    if (this.modeNuage) {
+      this.majEtendue();
+      if (n.etat.erreur || (n.etat.termine && n.etat.dalles === 0)) {
+        const message = parId('vue3d-message');
+        message.hidden = false;
+        message.textContent = n.etat.erreur ?? 'Le nuage de points LiDAR HD n’est pas encore publié sur cette zone : le relief reste affiché en volumes.';
+        setTimeout(() => (message.hidden = true), 6000);
+        if (!n.etat.erreur || n.etat.points === 0) this.basculerNuage(false);
+      }
+    }
+    this.demanderRendu();
+  }
+
+  basculerNuage(actif: boolean): void {
+    this.modeNuage = actif;
+    const bouton = parId('v3-nuage');
+    bouton.setAttribute('aria-pressed', String(actif));
+    if (actif) this.chargerNuage();
+    else this.nuage?.arreter();
+    this.appliquerModeNuage();
+    this.majEtendue();
   }
 
   /** Remaille le relief avec une autre étendue, sans toucher au point de vue. */
@@ -544,7 +683,7 @@ export class Vue3D {
   }
 
   /** Mode, position et regard de la caméra (diagnostic et tests). */
-  etatCamera(): { mode: 'fenetre' | 'ensemble'; x: number; y: number; z: number; cap: number; site: number; champ: number; cible: { x: number; y: number; z: number }; geste: 'deplacer' | 'tourner'; etendue: string; rayonTotal: number; anneaux: number; triangles: number; loin: number; centre: { x: number; y: number }; suivi: boolean } {
+  etatCamera(): { mode: 'fenetre' | 'ensemble'; x: number; y: number; z: number; cap: number; site: number; champ: number; cible: { x: number; y: number; z: number }; geste: 'deplacer' | 'tourner'; etendue: string; rayonTotal: number; anneaux: number; triangles: number; loin: number; centre: { x: number; y: number }; suivi: boolean; nuage: (EtatNuage & { actif: boolean; maillageVisible: boolean }) | null } {
     const p = this.camera.position;
     const c = this.commandes.target;
     return {
@@ -564,6 +703,7 @@ export class Vue3D {
       loin: this.camera.far,
       centre: { x: this.infos?.x ?? 0, y: this.infos?.y ?? 0 },
       suivi: this.bordEnCours || this.minuterieBord !== 0,
+      nuage: this.nuage ? { ...this.nuage.etat, actif: this.modeNuage, maillageVisible: this.proche?.layers.test(this.camera.layers) ?? false } : null,
     };
   }
 
@@ -726,6 +866,8 @@ export class Vue3D {
       texture.setAttribute('aria-pressed', String(active));
       void this.chargerTexture(active);
     });
+    const nuage = parId('v3-nuage');
+    nuage.addEventListener('click', () => this.basculerNuage(nuage.getAttribute('aria-pressed') !== 'true'));
     parId('v3-recentrer').addEventListener('click', () => this.recentrer());
     const choix = parId<HTMLSelectElement>('v3-etendue');
     choix.replaceChildren(...ETENDUES.map((e) => new Option(e.libelle, e.id, false, e.id === this.etendueId)));
@@ -743,6 +885,7 @@ export class Vue3D {
     this.matToits.map = active ? this.texture : null;
     this.matToits.vertexColors = !active;
     this.matToits.needsUpdate = true;
+    this.nuage?.definirPhoto(active ? this.texture : null, this.infos?.rayon ?? 0);
     this.demanderRendu();
   }
 
@@ -786,6 +929,8 @@ export class Vue3D {
       const r = this.canvas.getBoundingClientRect();
       const souris = new THREE.Vector2(((ev.clientX - r.left) / r.width) * 2 - 1, -((ev.clientY - r.top) / r.height) * 2 + 1);
       const rayon = new THREE.Raycaster();
+      // Le maillage, même masqué derrière le nuage de points, sert à désigner la façade.
+      rayon.layers.enableAll();
       rayon.setFromCamera(souris, this.camera);
       const touche = rayon.intersectObject(this.proche, false)[0];
       if (!touche || !touche.face) return;

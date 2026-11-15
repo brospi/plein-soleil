@@ -11,7 +11,7 @@ interface Api {
   scene(): { mode: string; avertissements: string[]; x: number; y: number; inventaire: { source: string; recenses: number; persistants: number; partIdentifiee: number } | null } | null;
   deplacerCarte(dx: number, dy: number): void;
   inertie3d(active: boolean): void;
-  camera3d(): { mode: 'fenetre' | 'ensemble'; x: number; y: number; z: number; cap: number; site: number; champ: number; cible: { x: number; y: number; z: number }; geste: 'deplacer' | 'tourner'; etendue: string; rayonTotal: number; anneaux: number; triangles: number; loin: number; centre: { x: number; y: number }; suivi: boolean } | null;
+  camera3d(): { mode: 'fenetre' | 'ensemble'; x: number; y: number; z: number; cap: number; site: number; champ: number; cible: { x: number; y: number; z: number }; geste: 'deplacer' | 'tourner'; etendue: string; rayonTotal: number; anneaux: number; triangles: number; loin: number; centre: { x: number; y: number }; suivi: boolean; nuage: { actif: boolean; maillageVisible: boolean; points: number; noeuds: number; attendus: number; dalles: number; termine: boolean; erreur: string | null; rayon: number } | null } | null;
   resultat(): {
     dureeMs: number;
     fenetres: Array<{
@@ -446,6 +446,37 @@ test('en 3D, la zone chargée suit la caméra quand on s’éloigne du centre', 
   await expect(page.locator('#carte')).toBeVisible();
   const proche = await page.evaluate(() => window.pleinSoleil.murs()[0]?.distance ?? 1e9);
   expect(proche).toBeLessThan(80);
+  expect(erreurs, erreurs.join('\n')).toEqual([]);
+});
+
+test('en 3D, le nuage de points LiDAR HD remplace les volumes, puis les rend', async ({ page }) => {
+  const erreurs = surveiller(page);
+  const a = ADRESSES[0];
+  await chercher(page, a.saisie, a.attendu);
+  await page.locator('#onglet-3d').click();
+  await page.waitForFunction(() => (window.pleinSoleil.camera3d()?.triangles ?? 0) > 0, undefined, { timeout: 60_000 });
+  await expect(page.locator('#vue3d-message')).toBeHidden({ timeout: 30_000 });
+  const bouton = page.locator('#v3-nuage');
+  await bouton.click();
+  await expect(bouton).toHaveAttribute('aria-pressed', 'true');
+  // Fichiers COPC de l'IGN lus par plages d'octets et décodés dans le navigateur.
+  await page.waitForFunction(() => {
+    const n = window.pleinSoleil.camera3d()?.nuage;
+    return n !== null && n !== undefined && (n.termine || n.erreur !== null);
+  }, undefined, { timeout: 120_000 });
+  const n = (await page.evaluate(() => window.pleinSoleil.camera3d()!.nuage))!;
+  expect(n.erreur).toBeNull();
+  expect(n.dalles).toBeGreaterThanOrEqual(1);
+  expect(n.dalles).toBeLessThanOrEqual(4);
+  expect(n.noeuds).toBe(n.attendus);
+  expect(n.points).toBeGreaterThan(500_000);
+  expect(n.maillageVisible).toBe(false);
+  await expect(page.locator('#v3-etendue-info')).toContainText('M points');
+  // Retour aux volumes.
+  await bouton.click();
+  await expect(bouton).toHaveAttribute('aria-pressed', 'false');
+  expect(await page.evaluate(() => window.pleinSoleil.camera3d()!.nuage!.maillageVisible)).toBe(true);
+  await expect(page.locator('#v3-etendue-info')).toContainText('triangles');
   expect(erreurs, erreurs.join('\n')).toEqual([]);
 });
 
