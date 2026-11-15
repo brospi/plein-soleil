@@ -12,6 +12,7 @@ import { ANNEE_TYPE, dateDuJour, positionSoleil, utcDepuisHeureLegale } from '..
 import { COUCHE_ORTHO_WMS, urlImage } from '../donnees/ign';
 import { dateLongue, heureDuJour, parId } from './outils';
 import { AIDE_3D, AIDE_VUE_FENETRE } from './textes';
+import { ETENDUES, ETENDUE_DEFAUT, ETENDUE_MOBILE, etendue } from '../moteur/anneaux';
 
 export interface PointMur {
   x: number;
@@ -34,8 +35,9 @@ interface Observation {
 }
 
 const RAD = Math.PI / 180;
-/** Distance (m) à laquelle sont dessinés le soleil et sa course : assez loin pour passer derrière tout le quartier. */
-const DISTANCE_CIEL = 3000;
+/** Distance minimale (m) du soleil et de sa course : toujours au-delà du relief maillé. */
+const DISTANCE_CIEL_MIN = 3000;
+const CLE_ETENDUE = 'plein-soleil:etendue3d';
 const CHAMP_ENSEMBLE = 42;
 const CHAMP_FENETRE = 75;
 
@@ -53,7 +55,11 @@ function melanger(a: number, b: number, t: number): THREE.Color {
 export class Vue3D {
   private rendu: THREE.WebGLRenderer;
   private scene3 = new THREE.Scene();
-  private camera = new THREE.PerspectiveCamera(42, 1, 1, 6000);
+  private camera = new THREE.PerspectiveCamera(42, 1, 1, 8000);
+  private distanceCiel = DISTANCE_CIEL_MIN;
+  /** Étendue du relief maillé, et dernier centre demandé (pour remailler quand on la change). */
+  private etendueId: string;
+  private centreCourant: { x: number; y: number; az: number | null } | null = null;
   private commandes: OrbitControls;
   private soleil = new THREE.DirectionalLight(0xffffff, 3);
   private ciel = new THREE.HemisphereLight(0xcfe2f7, 0xb9b2a4, 1);
@@ -71,8 +77,8 @@ export class Vue3D {
   private mobile = window.matchMedia('(max-width: 700px)').matches || (navigator.hardwareConcurrency ?? 8) <= 4;
   /** Soleil visible et course du jour, dessinés très loin : les bâtiments les cachent comme dans la réalité. */
   private voute = new THREE.Group();
-  private disque = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 16), new THREE.MeshBasicMaterial({ color: 0xffd23a, toneMapped: false }));
-  private course = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0xf08c00, toneMapped: false }));
+  private disque = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 16), new THREE.MeshBasicMaterial({ color: 0xffd23a, toneMapped: false, fog: false }));
+  private course = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0xf08c00, toneMapped: false, fog: false }));
   private reperes = new THREE.Group();
   private etiquettes = new Map<number, THREE.Texture>();
   /** Vue depuis la fenêtre : position de l'œil, cap (azimut grille) et site (angle au-dessus de l'horizontale), en radians. */
@@ -106,7 +112,16 @@ export class Vue3D {
     this.soleil.shadow.bias = -0.0002;
     this.soleil.shadow.normalBias = 0.08;
     this.soleil.shadow.radius = 2.5;
-    this.disque.scale.setScalar(DISTANCE_CIEL * Math.tan(1.1 * RAD));
+    let memorisee: string | null = null;
+    try {
+      memorisee = localStorage.getItem(CLE_ETENDUE);
+    } catch {
+      /* stockage indisponible */
+    }
+    this.etendueId = etendue(memorisee ?? (this.mobile ? ETENDUE_MOBILE : ETENDUE_DEFAUT)).id;
+    // Brume légère : le bord du relief se fond dans le ciel au lieu de s'arrêter net.
+    this.scene3.fog = new THREE.Fog(0xbcd9f2, 1000, 2000);
+    this.disque.scale.setScalar(this.distanceCiel * Math.tan(1.1 * RAD));
     this.voute.add(this.disque, this.course, this.reperes);
     this.scene3.add(this.soleil, this.soleil.target, this.ciel, this.maillages, this.marqueurs, this.voute);
 
@@ -163,7 +178,7 @@ export class Vue3D {
 
   /** Empêche la vue de quitter le quartier maillé : on ramène ensemble le point visé et la caméra. */
   private retenirCible(): void {
-    const limite = (this.infos?.rayon ?? 150) + 40;
+    const limite = (this.infos?.rayonPromenade ?? 150) + 40;
     const c = this.commandes.target;
     const corrige = new THREE.Vector3(Math.max(-limite, Math.min(limite, c.x)), Math.max(0, Math.min(90, c.y)), Math.max(-limite, Math.min(limite, c.z)));
     if (corrige.distanceToSquared(c) < 1e-8) return;
@@ -180,6 +195,7 @@ export class Vue3D {
       if (this.lecture) this.avancer();
       // En vue depuis la fenêtre, la caméra est pilotée directement (regard libre, position fixe).
       if (!this.vueFenetre) this.commandes.update();
+      this.majBrume();
       this.rendu.render(this.scene3, this.camera);
       if (this.lecture) this.demanderRendu();
     });
@@ -197,7 +213,7 @@ export class Vue3D {
   }
 
   /* ---------- Scène ---------- */
-  private geometrie(m: Maillage, rayonTexture: number): THREE.BufferGeometry {
+  private geometrie(m: Maillage, rayonTexture: number | null): THREE.BufferGeometry {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(m.positions, 3));
     g.setAttribute('normal', new THREE.BufferAttribute(m.normales, 3, true));
@@ -205,7 +221,17 @@ export class Vue3D {
     const couleurs = new Float32Array(n);
     for (let i = 0; i < n; i++) couleurs[i] = LINEAIRE[m.couleurs[i]];
     g.setAttribute('color', new THREE.BufferAttribute(couleurs, 3));
-    // Coordonnées de texture : projection verticale de la photo aérienne.
+    // Coordonnées de texture : projection verticale de la photo aérienne (anneau fin seulement).
+    if (rayonTexture === null) {
+      const indices = new Uint32Array(m.indicesToits.length + m.indicesMurs.length);
+      indices.set(m.indicesToits);
+      indices.set(m.indicesMurs, m.indicesToits.length);
+      g.setIndex(new THREE.BufferAttribute(indices, 1));
+      g.addGroup(0, m.indicesToits.length, 0);
+      g.addGroup(m.indicesToits.length, m.indicesMurs.length, 1);
+      g.computeBoundingSphere();
+      return g;
+    }
     const uv = new Float32Array((m.positions.length / 3) * 2);
     for (let i = 0, j = 0; i < m.positions.length; i += 3, j += 2) {
       uv[j] = (m.positions[i] + rayonTexture) / (2 * rayonTexture);
@@ -223,13 +249,16 @@ export class Vue3D {
   }
 
   async chargerScene(scene: InfoScene, centre: { x: number; y: number; az: number | null }): Promise<void> {
-    const rayon = this.mobile ? 90 : 150;
-    const rayonLointain = this.mobile ? 260 : 460;
-    const r = await this.moteur.maillage({ x: centre.x, y: centre.y, rayon, rayonLointain });
+    this.centreCourant = centre;
+    const r = await this.moteur.maillage({ x: centre.x, y: centre.y, etendue: this.etendueId });
+    const rayon = r.rayon;
     this.sceneCourante = scene;
     this.infos = r;
     for (const enfant of [...this.maillages.children]) {
-      (enfant as THREE.Mesh).geometry.dispose();
+      const m = enfant as THREE.Mesh;
+      m.geometry.dispose();
+      // Les matériaux des anneaux extérieurs sont propres à chaque maillage ; ceux du centre sont réutilisés.
+      for (const mat of new Set(Array.isArray(m.material) ? m.material : [m.material])) if (mat !== this.matToits && mat !== this.matMurs) mat.dispose();
       this.maillages.remove(enfant);
     }
     this.texture?.dispose();
@@ -237,17 +266,28 @@ export class Vue3D {
     this.appliquerTexture(false);
     parId('v3-texture').setAttribute('aria-pressed', 'false');
 
-    this.proche = new THREE.Mesh(this.geometrie(r.proche, rayon), [this.matToits, this.matMurs]);
+    const [fin, ...autres] = r.anneaux;
+    this.proche = new THREE.Mesh(this.geometrie(fin.maillage, rayon), [this.matToits, this.matMurs]);
     this.proche.castShadow = true;
     this.proche.receiveShadow = true;
     this.maillages.add(this.proche);
-    if (r.lointain) {
-      // Le pourtour garde ses couleurs de classe (pas de photo) et ne projette pas d'ombre.
+    if (autres.length) {
+      // Les anneaux extérieurs gardent leurs couleurs de classe (pas de photo) et ne projettent pas d'ombre.
       const matLoin = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0, side: THREE.DoubleSide });
-      const loin = new THREE.Mesh(this.geometrie(r.lointain, rayonLointain), [matLoin, matLoin]);
-      loin.receiveShadow = true;
-      this.maillages.add(loin);
+      for (const a of autres) {
+        const loin = new THREE.Mesh(this.geometrie(a.maillage, null), [matLoin, matLoin]);
+        loin.receiveShadow = true;
+        this.maillages.add(loin);
+      }
     }
+    // Caméra, brume et ciel à la mesure de l'étendue.
+    const total = r.rayonTotal;
+    this.distanceCiel = Math.max(DISTANCE_CIEL_MIN, total * 1.15);
+    this.disque.scale.setScalar(this.distanceCiel * Math.tan(1.1 * RAD));
+    this.camera.far = this.distanceCiel * 1.6;
+    this.camera.updateProjectionMatrix();
+    this.commandes.maxDistance = Math.max(900, total * 1.4);
+    this.majEtendue();
     // Volume d'ombre : toute la zone proche.
     const cam = this.soleil.shadow.camera;
     const demi = rayon * 1.45;
@@ -335,6 +375,59 @@ export class Vue3D {
     this.demanderRendu();
   }
 
+  /**
+   * La brume commence à mi-chemin du bord du relief et le masque juste au-delà,
+   * en comptant depuis le point visé : reculer la caméra ne noie pas la vue.
+   */
+  private majBrume(): void {
+    const brume = this.scene3.fog as THREE.Fog;
+    const total = this.infos?.rayonTotal ?? 460;
+    const recul = this.vueFenetre ? 0 : this.camera.position.distanceTo(this.commandes.target);
+    brume.near = recul + total * 0.55;
+    brume.far = recul + total * 1.1;
+  }
+
+  /* ---------- Étendue du relief ---------- */
+  private majEtendue(): void {
+    const choix = parId<HTMLSelectElement>('v3-etendue');
+    choix.value = this.etendueId;
+    if (this.infos) {
+      const millions = this.infos.triangles / 1e6;
+      parId('v3-etendue-info').textContent = `${millions.toLocaleString('fr-FR', { maximumFractionDigits: 1 })} M triangles`;
+    }
+  }
+
+  /** Remaille le relief avec une autre étendue, sans toucher au point de vue. */
+  async changerEtendue(id: string): Promise<void> {
+    this.etendueId = etendue(id).id;
+    try {
+      localStorage.setItem(CLE_ETENDUE, this.etendueId);
+    } catch {
+      /* stockage indisponible : le choix vaut pour cette visite */
+    }
+    if (!this.sceneCourante || !this.centreCourant) return;
+    const message = parId('vue3d-message');
+    message.hidden = false;
+    message.textContent = 'Construction du relief 3D…';
+    const camera = this.camera.position.clone();
+    const cible = this.commandes.target.clone();
+    const regard = this.vueFenetre;
+    try {
+      await this.chargerScene(this.sceneCourante, this.centreCourant);
+      // On garde le point de vue de l'utilisateur.
+      if (regard) this.basculerVueFenetre(true);
+      else {
+        this.camera.position.copy(camera);
+        this.commandes.target.copy(cible);
+        this.arreterInertie();
+      }
+      message.hidden = true;
+    } catch (e) {
+      message.textContent = `Le relief 3D n’a pas pu être construit : ${(e as Error).message}`;
+    }
+    this.demanderRendu();
+  }
+
   /* ---------- Vue depuis la fenêtre ---------- */
   basculerVueFenetre(active: boolean): void {
     if (active && !this.oeil) return;
@@ -366,7 +459,7 @@ export class Vue3D {
   }
 
   /** Mode, position et regard de la caméra (diagnostic et tests). */
-  etatCamera(): { mode: 'fenetre' | 'ensemble'; x: number; y: number; z: number; cap: number; site: number; champ: number; cible: { x: number; y: number; z: number }; geste: 'deplacer' | 'tourner' } {
+  etatCamera(): { mode: 'fenetre' | 'ensemble'; x: number; y: number; z: number; cap: number; site: number; champ: number; cible: { x: number; y: number; z: number }; geste: 'deplacer' | 'tourner'; etendue: string; rayonTotal: number; anneaux: number; triangles: number; loin: number } {
     const p = this.camera.position;
     const c = this.commandes.target;
     return {
@@ -379,6 +472,11 @@ export class Vue3D {
       champ: this.camera.fov,
       cible: { x: c.x, y: c.y, z: c.z },
       geste: this.gesteDeplacer ? 'deplacer' : 'tourner',
+      etendue: this.etendueId,
+      rayonTotal: this.infos?.rayonTotal ?? 0,
+      anneaux: this.infos?.anneaux.length ?? 0,
+      triangles: this.infos?.triangles ?? 0,
+      loin: this.camera.far,
     };
   }
 
@@ -465,14 +563,14 @@ export class Vue3D {
     for (let m = 0; m <= 1440; m += 5) {
       const s = this.directionSoleil(m);
       if (!s || s.hauteur <= 0) continue;
-      const p = s.dir.clone().multiplyScalar(DISTANCE_CIEL);
+      const p = s.dir.clone().multiplyScalar(this.distanceCiel);
       points.push(p);
       if (m % 60 === 0) {
-        const point = new THREE.Mesh(new THREE.SphereGeometry(DISTANCE_CIEL * 0.004, 10, 8), new THREE.MeshBasicMaterial({ color: 0xf08c00, toneMapped: false }));
+        const point = new THREE.Mesh(new THREE.SphereGeometry(this.distanceCiel * 0.004, 10, 8), new THREE.MeshBasicMaterial({ color: 0xf08c00, toneMapped: false, fog: false }));
         point.position.copy(p);
-        const texte = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.etiquette(m / 60), toneMapped: false }));
-        texte.scale.set(DISTANCE_CIEL * 0.085, DISTANCE_CIEL * 0.0425, 1);
-        texte.position.copy(p).add(new THREE.Vector3(0, DISTANCE_CIEL * 0.035, 0));
+        const texte = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.etiquette(m / 60), toneMapped: false, fog: false }));
+        texte.scale.set(this.distanceCiel * 0.085, this.distanceCiel * 0.0425, 1);
+        texte.position.copy(p).add(new THREE.Vector3(0, this.distanceCiel * 0.035, 0));
         this.reperes.add(point, texte);
       }
     }
@@ -487,7 +585,7 @@ export class Vue3D {
     if (!courant) return;
     const { dir } = courant;
     const p = { hauteur: courant.hauteur };
-    this.disque.position.copy(dir).multiplyScalar(DISTANCE_CIEL);
+    this.disque.position.copy(dir).multiplyScalar(this.distanceCiel);
     this.disque.visible = p.hauteur > -0.5;
     this.voute.position.copy(this.vueFenetre && this.oeil ? this.oeil.position : new THREE.Vector3());
     const portee = (this.infos?.rayon ?? 150) * 3.2;
@@ -503,6 +601,7 @@ export class Vue3D {
     this.ciel.color.copy(melanger(0x2a3350, 0xcfe2f7, (h + 6) / 14));
     const fond = h > 0 ? melanger(0xf3c9a2, 0xbcd9f2, jourT) : melanger(0x0d1020, 0xf3c9a2, (h + 8) / 8);
     this.scene3.background = fond;
+    (this.scene3.fog as THREE.Fog).color.copy(fond);
     this.demanderRendu();
   }
 
@@ -541,6 +640,9 @@ export class Vue3D {
       void this.chargerTexture(active);
     });
     parId('v3-recentrer').addEventListener('click', () => this.recentrer());
+    const choix = parId<HTMLSelectElement>('v3-etendue');
+    choix.replaceChildren(...ETENDUES.map((e) => new Option(e.libelle, e.id, false, e.id === this.etendueId)));
+    choix.addEventListener('change', () => void this.changerEtendue(choix.value));
     parId('v3-fenetre').addEventListener('click', () => this.basculerVueFenetre(!this.vueFenetre));
     parId('v3-geste').addEventListener('click', () => {
       this.gesteDeplacer = !this.gesteDeplacer;

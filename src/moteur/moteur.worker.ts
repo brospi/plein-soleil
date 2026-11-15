@@ -12,9 +12,8 @@ import { Calculateur } from '../coeur/calcul';
 import { tableSolaire, type TableSolaire } from '../coeur/soleil';
 import { convergenceMeridiens, depuisLambert93 } from '../coeur/lambert93';
 import { Etat } from '../coeur/simulation';
-import { lisserRelief, maillerRelief } from '../coeur/maillage';
-import { type Raster, valeurLisse } from '../coeur/raster';
-import { Classe } from '../coeur/classification';
+import { coutAnneaux, etendue, maillerAnneaux, rayonPromenade } from './anneaux';
+import { valeurLisse } from '../coeur/raster';
 import { areteLaPlusProche } from '../coeur/facades';
 
 const moi = self as unknown as DedicatedWorkerGlobalScope;
@@ -153,63 +152,31 @@ function calculer(r: Extract<Requete, { type: 'calculer' }>): { resultat: Result
   return { resultat: { fenetres, cumul, dureeMs: performance.now() - t0 }, transfert };
 }
 
-/** Extrait un carré de cellules d'un niveau (surface visible : canopée ou bâti). */
-function extraire(dur: Raster, arbres: Raster | null, classes: Uint8Array | null, x: number, y: number, rayon: number, persistants: Raster | null = null) {
-  const c0 = Math.max(0, Math.floor((x - rayon - dur.x0) / dur.pas));
-  const c1 = Math.min(dur.largeur, Math.ceil((x + rayon - dur.x0) / dur.pas));
-  const l0 = Math.max(0, Math.floor((dur.y1 - (y + rayon)) / dur.pas));
-  const l1 = Math.min(dur.hauteur, Math.ceil((dur.y1 - (y - rayon)) / dur.pas));
-  const largeur = Math.max(0, c1 - c0);
-  const hauteur = Math.max(0, l1 - l0);
-  const h = new Float32Array(largeur * hauteur);
-  const cl = new Uint8Array(largeur * hauteur);
-  for (let l = 0; l < hauteur; l++) {
-    for (let c = 0; c < largeur; c++) {
-      const i = (l + l0) * dur.largeur + (c + c0);
-      const a = arbres ? arbres.d[i] : -9999;
-      const o = l * largeur + c;
-      if (a > -1000) {
-        h[o] = a;
-        cl[o] = persistants && persistants.d[i] > -1000 ? Classe.VegetationPersistante : Classe.Vegetation;
-      } else {
-        h[o] = Math.max(dur.d[i], -100);
-        cl[o] = classes ? (classes[i] === Classe.Vegetation ? Classe.Sol : classes[i]) : Classe.Sol;
-      }
-    }
-  }
-  // Position du centre de la cellule (0, 0) dans le repère de la vue (x est, z sud).
-  const ox = dur.x0 + (c0 + 0.5) * dur.pas - x;
-  const oz = y - (dur.y1 - (l0 + 0.5) * dur.pas);
-  return { h, cl, largeur, hauteur, ox, oz, c0, l0 };
-}
-
 function mailler(r: Extract<Requete, { type: 'maillage' }>): { resultat: ResultatMaillage; transfert: Transferable[] } {
   if (!scene) throw new Error('Aucune adresse chargée.');
   const z0 = valeurLisse(scene.relief.mnt, r.x, r.y, 0);
-  const n0 = scene.niveaux[0];
-  const e = extraire(n0.dur, n0.arbres, scene.classes, r.x, r.y, r.rayon, n0.persistants ?? null);
-  const proche = maillerRelief(lisserRelief(e.h, e.largeur, e.hauteur), e.cl, e.largeur, e.hauteur, n0.dur.pas, { seuil: 1.2, ox: e.ox, oz: e.oz, z0 });
-  let lointain = null;
-  const n1 = scene.niveaux[1];
-  if (n1 && r.rayonLointain > r.rayon) {
-    const f = extraire(n1.dur, n1.arbres, scene.classesMoyen, r.x, r.y, r.rayonLointain);
-    // Cellules du niveau moyen entièrement couvertes par le maillage fin.
-    const pas = n1.dur.pas;
-    const xMin = e.ox + 0.5;
-    const xMax = e.ox + (e.largeur - 1) * n0.dur.pas - 0.5;
-    const zMin = e.oz + 0.5;
-    const zMax = e.oz + (e.hauteur - 1) * n0.dur.pas - 0.5;
-    const exclure = {
-      c0: Math.ceil((xMin - f.ox) / pas),
-      c1: Math.floor((xMax - f.ox) / pas),
-      l0: Math.ceil((zMin - f.oz) / pas),
-      l1: Math.floor((zMax - f.oz) / pas),
-    };
-    lointain = maillerRelief(f.h, f.cl, f.largeur, f.hauteur, pas, { seuil: 3, ox: f.ox, oz: f.oz, z0, exclure });
+  const e = etendue(r.etendue);
+  const anneaux = maillerAnneaux(scene.niveaux, [scene.classes, scene.classesMoyen, null], r.x, r.y, z0, e.anneaux);
+  if (!anneaux.length) throw new Error('Le relief de cette zone n’a pas pu être maillé.');
+  const transfert: Transferable[] = [];
+  for (const a of anneaux) {
+    const m = a.maillage;
+    transfert.push(m.positions.buffer, m.normales.buffer, m.couleurs.buffer, m.indicesToits.buffer, m.indicesMurs.buffer);
   }
-  const transfert: Transferable[] = [proche.positions.buffer, proche.normales.buffer, proche.couleurs.buffer, proche.indicesToits.buffer, proche.indicesMurs.buffer];
-  if (lointain) transfert.push(lointain.positions.buffer, lointain.normales.buffer, lointain.couleurs.buffer, lointain.indicesToits.buffer, lointain.indicesMurs.buffer);
-  return { resultat: { proche, lointain, z0, x: r.x, y: r.y, rayon: r.rayon, rayonLointain: r.rayonLointain }, transfert };
+  return {
+    resultat: {
+      anneaux,
+      z0,
+      x: r.x,
+      y: r.y,
+      rayon: anneaux[0].rayon,
+      rayonTotal: anneaux[anneaux.length - 1].rayon,
+      rayonPromenade: rayonPromenade(e.anneaux, scene.niveaux.map((n) => n.dur)),
+      etendue: e.id,
+      triangles: coutAnneaux(anneaux).triangles,
+    },
+    transfert,
+  };
 }
 
 moi.onmessage = async (ev: MessageEvent<{ id: number; requete: Requete }>) => {

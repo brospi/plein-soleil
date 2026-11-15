@@ -1,13 +1,13 @@
 /** Messages échangés entre l'interface et le moteur de calcul (Web Worker). */
 import { type Arete, type Batiment, type ParametresEtages } from '../coeur/facades';
 import { type Reglages, type ResultatFenetre, type SpecFenetre } from '../coeur/calcul';
-import { type Maillage } from '../coeur/maillage';
+import { type AnneauMaille } from './anneaux';
 import { type InfoInventaire, type ModeRelief } from './scene';
 
 export type Requete =
   | { type: 'charger'; x: number; y: number; etages: ParametresEtages }
   | { type: 'calculer'; fenetres: SpecFenetre[]; actif: number; reglages: Reglages; tous: boolean }
-  | { type: 'maillage'; x: number; y: number; rayon: number; rayonLointain: number }
+  | { type: 'maillage'; x: number; y: number; etendue: string }
   | { type: 'viderCache' };
 
 export interface InfoScene {
@@ -45,14 +45,19 @@ export interface ResultatCalcul {
 }
 
 export interface ResultatMaillage {
-  proche: Maillage;
-  lointain: Maillage | null;
+  /** Anneaux du plus fin (premier, au centre) au plus grossier. */
+  anneaux: AnneauMaille[];
   /** Altitude (m NGF) correspondant à y = 0 dans la vue, et centre Lambert 93 de la vue. */
   z0: number;
   x: number;
   y: number;
+  /** Rayon du détail fin (m), de toute la vue (m), et de la zone où la caméra peut se promener (m). */
   rayon: number;
-  rayonLointain: number;
+  rayonTotal: number;
+  rayonPromenade: number;
+  etendue: string;
+  /** Taille du maillage, pour l'information de l'utilisateur. */
+  triangles: number;
 }
 
 export type Reponse =

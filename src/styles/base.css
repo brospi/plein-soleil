@@ -535,6 +535,27 @@ h3 + .aide {
   border-radius: 12px;
   box-shadow: var(--ombre);
 }
+.vue3d__etendue {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+  color: var(--texte-doux);
+}
+.vue3d__etendue select {
+  min-height: 32px;
+  padding: 2px 8px;
+  border: 1px solid var(--bord-fort);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--texte);
+  font: inherit;
+}
+.vue3d__etendue small {
+  font-variant-numeric: tabular-nums;
+}
 .vue3d__commandes .curseur {
   margin-top: 0;
 }

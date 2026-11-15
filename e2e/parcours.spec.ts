@@ -11,7 +11,7 @@ interface Api {
   scene(): { mode: string; avertissements: string[]; x: number; y: number; inventaire: { source: string; recenses: number; persistants: number; partIdentifiee: number } | null } | null;
   deplacerCarte(dx: number, dy: number): void;
   inertie3d(active: boolean): void;
-  camera3d(): { mode: 'fenetre' | 'ensemble'; x: number; y: number; z: number; cap: number; site: number; champ: number; cible: { x: number; y: number; z: number }; geste: 'deplacer' | 'tourner' } | null;
+  camera3d(): { mode: 'fenetre' | 'ensemble'; x: number; y: number; z: number; cap: number; site: number; champ: number; cible: { x: number; y: number; z: number }; geste: 'deplacer' | 'tourner'; etendue: string; rayonTotal: number; anneaux: number; triangles: number; loin: number } | null;
   resultat(): {
     dureeMs: number;
     fenetres: Array<{
@@ -237,14 +237,33 @@ test('mode agrandi : bascule Carte / 3D, et vue depuis la fenêtre choisie', asy
   const c2 = (await page.evaluate(() => window.pleinSoleil.camera3d()))!;
   expect(Math.hypot(c2.cible.x - c1b.cible.x, c2.cible.z - c1b.cible.z)).toBeLessThan(1e-3);
   expect(Math.hypot(c2.x - c1b.x, c2.z - c1b.z)).toBeGreaterThan(5);
-  // On ne peut pas sortir du quartier maillé, même en insistant.
+  // On peut s'éloigner au-delà du détail fin, sans sortir du relief maillé.
   await page.locator('#v3-geste').click();
   for (let i = 0; i < 4; i++) await glisser(-500, 0);
   const c3 = (await page.evaluate(() => window.pleinSoleil.camera3d()))!;
-  expect(Math.max(Math.abs(c3.cible.x), Math.abs(c3.cible.z))).toBeLessThanOrEqual(191);
+  // Étendue « Standard » : promenade dans l'anneau au pas de 2 m (460 m) plus 40 m de marge.
+  expect(Math.max(Math.abs(c3.cible.x), Math.abs(c3.cible.z))).toBeLessThanOrEqual(501);
+  expect(Math.hypot(c3.cible.x, c3.cible.z)).toBeGreaterThan(150);
   await page.locator('#v3-recentrer').click();
   const c4 = (await page.evaluate(() => window.pleinSoleil.camera3d()))!;
   expect(Math.hypot(c4.cible.x, c4.cible.z)).toBeLessThan(Math.hypot(c3.cible.x, c3.cible.z));
+
+  // Étendue du relief : par défaut 450 m ; on passe à 4 km sans perdre le point de vue, et le choix est mémorisé.
+  const avantEtendue = (await page.evaluate(() => window.pleinSoleil.camera3d()))!;
+  expect(avantEtendue.etendue).toBe('standard');
+  expect(avantEtendue.rayonTotal).toBe(460);
+  await expect(page.locator('#v3-etendue-info')).toContainText('M triangles');
+  await page.locator('#v3-etendue').selectOption('maximale');
+  await page.waitForFunction(() => window.pleinSoleil.camera3d()!.rayonTotal === 4000, undefined, { timeout: 60_000 });
+  await expect(page.locator('#vue3d-message')).toBeHidden({ timeout: 30_000 });
+  const apresEtendue = (await page.evaluate(() => window.pleinSoleil.camera3d()))!;
+  console.log(`  étendue maximale : ${apresEtendue.anneaux} anneaux, ${(apresEtendue.triangles / 1e6).toFixed(1)} M triangles (standard : ${(avantEtendue.triangles / 1e6).toFixed(1)} M)`);
+  expect(apresEtendue.anneaux).toBe(5);
+  expect(apresEtendue.loin).toBeGreaterThan(4000);
+  expect(Math.hypot(apresEtendue.x - avantEtendue.x, apresEtendue.z - avantEtendue.z)).toBeLessThan(1e-3);
+  expect(await page.evaluate(() => localStorage.getItem('plein-soleil:etendue3d'))).toBe('maximale');
+  await page.locator('#v3-etendue').selectOption('standard');
+  await page.waitForFunction(() => window.pleinSoleil.camera3d()!.rayonTotal === 460, undefined, { timeout: 60_000 });
 
   // Vue depuis la fenêtre : l'œil est à la hauteur du centre du vitrage et regarde dans l'axe de la façade.
   const attendu = await page.evaluate(() => {
